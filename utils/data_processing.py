@@ -1,25 +1,39 @@
 import pandas as pd
 import numpy as np
 import networkx as nx
-from torch_geometric.utils import from_networkx
 from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.utils.class_weight import compute_class_weight
 from torch_geometric.data import Data
 import torch
+from collections import Counter
 
-def loadAndProcesData(csv_file):
-    # Load the specific CSV file
-    raw_data = pd.read_csv(csv_file)
+def loadAndProcesData(data_csv, features_csv):
+    # Load the feature names with the correct encoding
+    try:
+        feature_names = pd.read_csv(features_csv, encoding='ISO-8859-1')['Name'].tolist()
+    except UnicodeDecodeError:
+        # Try other common encodings if the first one fails
+        feature_names = pd.read_csv(features_csv, encoding='latin1')['Name'].tolist()
+    
+    # Load the dataset with the correct encoding
+    try:
+        raw_data = pd.read_csv(data_csv, header=None, encoding='ISO-8859-1', low_memory=False)
+    except UnicodeDecodeError:
+        # Try other common encodings if the first one fails
+        raw_data = pd.read_csv(data_csv, header=None, encoding='latin1', low_memory=False)
+    
+    # Assign feature names to the dataset columns
+    if len(raw_data.columns) == len(feature_names):
+        raw_data.columns = feature_names
+    else:
+        raise ValueError("Number of columns in the dataset does not match the number of feature names.")
     
     # Replace invalid values (e.g., '-', 'NaN', 'inf', '-inf') with NaN
     raw_data.replace(['-', 'NaN', 'inf', '-inf'], np.nan, inplace=True)
     
-    # Convert numeric columns to numeric, skipping non-numeric columns
+    # Convert all columns to numeric, coercing errors to NaN
     for col in raw_data.columns:
-        try:
-            raw_data[col] = pd.to_numeric(raw_data[col])  # Convert to numeric
-        except (ValueError, TypeError):
-            # Skip non-numeric columns
-            continue
+        raw_data[col] = pd.to_numeric(raw_data[col], errors='coerce')  # Use 'coerce' to convert non-numeric values to NaN
     
     # Replace infinite values with NaN
     raw_data.replace([np.inf, -np.inf], np.nan, inplace=True)
@@ -27,13 +41,13 @@ def loadAndProcesData(csv_file):
     # Fill NaN values with 0 or the mean/median of the column
     raw_data.fillna(0, inplace=True)  # Replace with 0 or use raw_data.fillna(raw_data.mean(), inplace=True)
     
-    # Exclude non-numeric columns (e.g., IP addresses) from features
-    non_numeric_columns = ['Flow ID', ' Source IP', ' Destination IP', ' Label', ' Timestamp']  # Add other non-numeric columns if needed
+    # Exclude non-numeric columns (e.g., IP addresses, labels) from features
+    non_numeric_columns = ['srcip', 'sport', 'dstip', 'dsport', 'attack_cat', 'Label']  # Adjust based on the dataset
     features = raw_data.drop(columns=non_numeric_columns)
     
-    # Check for infinite or extremely large values in features
-    if not np.isfinite(features.to_numpy()).all():
-        raise ValueError("Input X contains infinity or a value too large for dtype('float64')")
+    # Ensure all features are numeric
+    if not np.issubdtype(features.to_numpy().dtype, np.number):
+        raise ValueError("Features contain non-numeric data. Please check the dataset.")
     
     # Normalize features
     scaler = StandardScaler()
@@ -41,11 +55,17 @@ def loadAndProcesData(csv_file):
     
     # Encode labels
     label_encoder = LabelEncoder()
-    labels = label_encoder.fit_transform(raw_data[' Label'])  # Use the 'Label' column for labels
-    
-    return features, labels, raw_data  # Return the raw data for edge construction
+    labels = label_encoder.fit_transform(raw_data['Label'])  # Use the 'Label' column for labels
 
-def constructGraph(features,labels, raw_data):
+    print("Class distribution in the dataset:", Counter(labels))
+    
+    # Compute class weights
+    class_weights = compute_class_weight('balanced', classes=np.unique(labels), y=labels)
+    class_weights = torch.tensor(class_weights, dtype=torch.float)
+    
+    return features, labels, raw_data, class_weights  # Return the raw data and class weights
+
+def construct_graph(features, labels, raw_data):
     G = nx.Graph()
     
     # Create a mapping from IP addresses to node indices
@@ -54,8 +74,8 @@ def constructGraph(features,labels, raw_data):
     
     # Add nodes and edges based on communication
     for i, row in raw_data.iterrows():
-        src_ip = row[' Source IP']  # Replace 'Source IP' with the actual column name
-        dst_ip = row[' Destination IP']  # Replace 'Destination IP' with the actual column name
+        src_ip = row['srcip']  # Source IP
+        dst_ip = row['dstip']  # Destination IP
         
         # Add source IP as a node if not already added
         if src_ip not in ip_to_node:
@@ -76,7 +96,7 @@ def constructGraph(features,labels, raw_data):
     
     return G
 
-def convertToPygFormat(graph, features, labels):
+def convert_to_pyg_format(graph, features, labels):
     # Extract edge indices from the graph
     edge_index = np.array(list(graph.edges), dtype=np.int64).T  # Shape: [2, num_edges]
     

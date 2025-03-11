@@ -1,6 +1,7 @@
 class Config:
     #Data Path
-    CSV_FILE = "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv"
+    CSV_FILE = "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/UNSW-NB15_1.csv"
+    FEATURES_CSV = "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/NUSW-NB15_features.csv"
 
     #Model Hyperparameters
     HIDDEN_CHANNELS = 16
@@ -8,7 +9,7 @@ class Config:
     NUM_CLASSES = 2
     LEARNING_RATE = 0.01
     WEIGHT_DECAY = 5e-4
-    EPOCHS = 200
+    EPOCHS = 100
 
     #Training Settings
     TRAIN_RATIO = 0.7
