@@ -1,30 +1,63 @@
 import matplotlib
 matplotlib.use('Agg') 
 import torch
+import numpy as np
+import pandas as pd
 import torch.nn.functional as F
 from models.GAT import GAT
 from utils.data_processing import loadAndProcesData, construct_graph, convert_to_pyg_format
 from config import Config
 import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
 
 def train():
     # Load and preprocess data
     features, labels, raw_data, class_weights = loadAndProcesData(Config.CSV_FILE, Config.FEATURES_CSV)
     print("Data has been processed")
-    graph = construct_graph(features, labels, raw_data)
+
+    # Scale input features
+    from sklearn.preprocessing import StandardScaler
+    scaler = StandardScaler()
+    features_scaled = scaler.fit_transform(features)
+    features = pd.DataFrame(features_scaled, columns=features.columns)
+
+    # Undersample the majority class
+    num_malicious = np.sum(labels == 1)
+    benign_indices = np.where(labels == 0)[0]
+    undersampled_benign_indices = np.random.choice(benign_indices, size=num_malicious, replace=False)
+    balanced_indices = np.concatenate([undersampled_benign_indices, np.where(labels == 1)[0]])
+    np.random.shuffle(balanced_indices)
+
+    # Create balanced dataset
+    balanced_features = features.iloc[balanced_indices]
+    balanced_labels = labels[balanced_indices]
+    balanced_raw_data = raw_data.iloc[balanced_indices]
+
+    print("Data has been balanced using undersampling")
+
+    # Construct graph
+    graph = construct_graph(balanced_features, balanced_labels, balanced_raw_data)
     print("Graph has been created")
-    data = convert_to_pyg_format(graph, features, labels)
+
+    # Convert to PyG format
+    data = convert_to_pyg_format(graph, balanced_features, balanced_labels)
     print("Data has been converted")
 
-    #Split data into train, val and test
-    num_nodes = data.num_nodes
-    data.train_mask = torch.zeros(num_nodes, dtype=torch.bool)
-    data.val_mask = torch.zeros(num_nodes, dtype=torch.bool)
-    data.test_mask = torch.zeros(num_nodes, dtype=torch.bool)
+    # Split data into train, val, and test using stratified sampling
+    from sklearn.model_selection import train_test_split
+    node_indices = np.arange(data.num_nodes)
+    train_indices, test_indices = train_test_split(node_indices, test_size=Config.TEST_RATIO, stratify=balanced_labels)
+    train_indices, val_indices = train_test_split(train_indices, test_size=Config.VAL_RATIO / (1 - Config.TEST_RATIO), stratify=balanced_labels[train_indices])
 
-    data.train_mask[:int(Config.TRAIN_RATIO * num_nodes)] = True
-    data.val_mask[int(Config.TRAIN_RATIO * num_nodes):int((Config.TRAIN_RATIO + Config.VAL_RATIO) * num_nodes)] = True
-    data.test_mask[int((Config.TRAIN_RATIO + Config.VAL_RATIO)*num_nodes):] = True
+    # Create masks
+    data.train_mask = torch.zeros(data.num_nodes, dtype=torch.bool)
+    data.val_mask = torch.zeros(data.num_nodes, dtype=torch.bool)
+    data.test_mask = torch.zeros(data.num_nodes, dtype=torch.bool)
+    data.train_mask[train_indices] = True
+    data.val_mask[val_indices] = True
+    data.test_mask[test_indices] = True
+
+    print("Data has been split into train, val, and test sets")
 
     # Initialize model and optimizer
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -32,40 +65,31 @@ def train():
     data = data.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=Config.LEARNING_RATE, weight_decay=Config.WEIGHT_DECAY)
 
-    # Initialize lists to store losses
+    # Training loop
     train_losses = []
     val_losses = []
 
-    # Training loop
     print("Start Training Loop")
     for epoch in range(Config.EPOCHS):
         model.train()
         optimizer.zero_grad()
         out = model(data.x, data.edge_index)
         
-        # Use weighted loss function
-        loss = F.nll_loss(out[data.train_mask], data.y[data.train_mask], weight=class_weights.to(device))
+        # Use cross-entropy loss for multi-class classification
+        loss = F.cross_entropy(out[data.train_mask], data.y[data.train_mask])
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Clip gradients
         optimizer.step()
         train_losses.append(loss.item())
 
-        # Validation loss (no class weights)
+        # Validation loss
         model.eval()
         with torch.no_grad():
             val_out = model(data.x, data.edge_index)
-            val_loss = F.nll_loss(val_out[data.val_mask], data.y[data.val_mask])
+            val_loss = F.cross_entropy(val_out[data.val_mask], data.y[data.val_mask])
             val_losses.append(val_loss.item())
 
         print(f'Epoch {epoch + 1}, Loss: {loss.item():.4f}, Val Loss: {val_loss.item():.4f}')
-
-    plt.plot(train_losses, label='Training Loss')
-    plt.plot(val_losses, label='Validation Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.title('Training vs. Validation Loss')
-    plt.savefig('training_validation_loss.png')  # Save the plot to a file
-    plt.close()  # Close the plot to free memory
 
     # Save the model
     torch.save(model.state_dict(), 'gat_network_security_model.pth')

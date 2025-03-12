@@ -42,30 +42,26 @@ def loadAndProcesData(data_csv, features_csv):
     raw_data.fillna(0, inplace=True)  # Replace with 0 or use raw_data.fillna(raw_data.mean(), inplace=True)
     
     # Exclude non-numeric columns (e.g., IP addresses, labels) from features
-    non_numeric_columns = ['srcip', 'sport', 'dstip', 'dsport', 'attack_cat', 'Label']  # Adjust based on the dataset
+    non_numeric_columns = ['srcip', 'sport', 'dstip', 'dsport', 'attack_cat', 'Label']  # Use 'Label' instead of 'label'
     features = raw_data.drop(columns=non_numeric_columns)
-    
-    # Ensure all features are numeric
-    if not np.issubdtype(features.to_numpy().dtype, np.number):
-        raise ValueError("Features contain non-numeric data. Please check the dataset.")
-    
-    # Normalize features
-    scaler = StandardScaler()
-    features = scaler.fit_transform(features)
     
     # Encode labels
     label_encoder = LabelEncoder()
-    labels = label_encoder.fit_transform(raw_data['Label'])  # Use the 'Label' column for labels
-
-    print("Class distribution in the dataset:", Counter(labels))
+    labels = label_encoder.fit_transform(raw_data['Label'])  # Use 'Label' instead of 'label'
     
     # Compute class weights
     class_weights = compute_class_weight('balanced', classes=np.unique(labels), y=labels)
     class_weights = torch.tensor(class_weights, dtype=torch.float)
     
+    # Print class distribution
+    print("Class distribution in the dataset:", Counter(labels))
+    
     return features, labels, raw_data, class_weights  # Return the raw data and class weights
 
+
+
 def construct_graph(features, labels, raw_data):
+    import networkx as nx
     G = nx.Graph()
     
     # Create a mapping from IP addresses to node indices
@@ -80,13 +76,15 @@ def construct_graph(features, labels, raw_data):
         # Add source IP as a node if not already added
         if src_ip not in ip_to_node:
             ip_to_node[src_ip] = node_counter
-            G.add_node(node_counter, features=features[i], label=labels[i])
+            # Use .iloc to access the node_counter-th row of features
+            G.add_node(node_counter, features=features.iloc[node_counter].values, label=labels[node_counter])
             node_counter += 1
         
         # Add destination IP as a node if not already added
         if dst_ip not in ip_to_node:
             ip_to_node[dst_ip] = node_counter
-            G.add_node(node_counter, features=features[i], label=labels[i])
+            # Use .iloc to access the node_counter-th row of features
+            G.add_node(node_counter, features=features.iloc[node_counter].values, label=labels[node_counter])
             node_counter += 1
         
         # Add an edge between source and destination IPs
@@ -96,16 +94,28 @@ def construct_graph(features, labels, raw_data):
     
     return G
 
+
+
+
 def convert_to_pyg_format(graph, features, labels):
+    import torch
+    from torch_geometric.data import Data
+
+    # Convert features to a tensor
+    if hasattr(features, 'values'):  # Check if features is a pandas DataFrame
+        x = torch.tensor(features.values, dtype=torch.float)
+    else:  # Assume features is already a numpy array or compatible
+        x = torch.tensor(features, dtype=torch.float)
+
+    # Convert labels to a tensor
+    if hasattr(labels, 'values'):  # Check if labels is a pandas Series/DataFrame
+        y = torch.tensor(labels.values, dtype=torch.long)
+    else:  # Assume labels is already a numpy array or compatible
+        y = torch.tensor(labels, dtype=torch.long)
+
     # Extract edge indices from the graph
-    edge_index = np.array(list(graph.edges), dtype=np.int64).T  # Shape: [2, num_edges]
-    
-    # Convert to tensors
-    x = torch.tensor(features, dtype=torch.float)  # Node features
-    y = torch.tensor(labels, dtype=torch.long)     # Node labels
-    edge_index = torch.tensor(edge_index, dtype=torch.long)  # Edge indices
-    
-    # Create the PyTorch Geometric Data object
+    edge_index = torch.tensor(list(graph.edges), dtype=torch.long).t().contiguous()
+
+    # Create a PyG Data object
     data = Data(x=x, edge_index=edge_index, y=y)
-    
     return data

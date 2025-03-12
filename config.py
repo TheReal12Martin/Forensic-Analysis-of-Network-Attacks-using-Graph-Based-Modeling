@@ -9,7 +9,7 @@ class Config:
     NUM_CLASSES = 2
     LEARNING_RATE = 0.01
     WEIGHT_DECAY = 5e-4
-    EPOCHS = 100
+    EPOCHS = 200
 
     #Training Settings
     TRAIN_RATIO = 0.7
