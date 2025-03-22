@@ -1,0 +1,4 @@
+Summary of Predictions:
+prediction
+1    897741
+0    378471

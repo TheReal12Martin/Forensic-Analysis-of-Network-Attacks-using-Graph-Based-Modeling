@@ -6,49 +6,77 @@ import pandas as pd
 from tqdm import tqdm  # For progress bar
 
 def extract_pcap_features(pcap_file, output_csv):
-    """Extract features from a single PCAP file and save to a CSV."""
+    """Extract features from a single PCAP file."""
     # Read the PCAP file
     packets = rdpcap(pcap_file)
     data = []
 
-    # Process each packet
-    for pkt in tqdm(packets, desc="Processing packets"):
+    # Iterate over packets with a progress bar
+    for i, pkt in tqdm(enumerate(packets), total=len(packets), desc="Processing packets"):
+        # Check if the packet has an IP layer (IPv4 or IPv6)
         if IP in pkt or IPv6 in pkt:
-            # Extract basic features
             row = {
                 'srcip': pkt[IP].src if IP in pkt else pkt[IPv6].src,
                 'sport': pkt.sport if TCP in pkt or UDP in pkt else 0,
                 'dstip': pkt[IP].dst if IP in pkt else pkt[IPv6].dst,
                 'dsport': pkt.dport if TCP in pkt or UDP in pkt else 0,
                 'proto': pkt[IP].proto if IP in pkt else pkt[IPv6].nh,
-                'state': 'INT' if TCP in pkt else 'CON',
-                'dur': pkt.time,
+                'state': 'ESTABLISHED' if TCP in pkt and pkt[TCP].flags == 0x18 else 'OTHER',
+                'dur': pkt.time if i == 0 else pkt.time - packets[i-1].time,
                 'sbytes': len(pkt[IP].payload) if IP in pkt and Raw in pkt else len(pkt[IPv6].payload) if IPv6 in pkt and Raw in pkt else 0,
-                'dbytes': 0,
+                'dbytes': 0,  # Placeholder for destination bytes
                 'sttl': pkt[IP].ttl if IP in pkt else pkt[IPv6].hlim,
-                'dttl': 0,
-                'sloss': 0,
-                'dloss': 0,
-                'service': '-',
-                'sload': 0,
-                'dload': 0,
-                'sinpkt': 0,
-                'dinpkt': 0,
-                'label': 0,
-                'attack_cat': 'Normal'
+                'dttl': pkt[IP].ttl if IP in pkt else pkt[IPv6].hlim,
+                'sloss': 0,  # Placeholder for source packet loss
+                'dloss': 0,  # Placeholder for destination packet loss
+                'service': 'http' if TCP in pkt and pkt[TCP].dport == 80 else '-',
+                'sload': 0,  # Placeholder for source load
+                'dload': 0,  # Placeholder for destination load
+                'sinpkt': 0 if i == 0 else pkt.time - packets[i-1].time,
+                'dinpkt': 0,  # Placeholder for destination inter-packet arrival time
+                'sjit': 0,  # Placeholder for source jitter
+                'djit': 0,  # Placeholder for destination jitter
+                'swin': pkt[TCP].window if TCP in pkt else 0,
+                'stcpb': pkt[TCP].seq if TCP in pkt else 0,
+                'dtcpb': pkt[TCP].seq if TCP in pkt else 0,
+                'dwin': pkt[TCP].window if TCP in pkt else 0,
+                'tcprtt': 0,  # Placeholder for TCP RTT
+                'synack': 0,  # Placeholder for SYN-ACK time
+                'ackdat': 0,  # Placeholder for ACK data time
+                'smean': 0,  # Placeholder for source mean packet size
+                'dmean': 0,  # Placeholder for destination mean packet size
+                'trans_depth': 0,  # Placeholder for transaction depth
+                'response_body_len': 0,  # Placeholder for response body length
+                'ct_srv_src': 0,  # Placeholder for connection count from source to service
+                'ct_state_ttl': 0,  # Placeholder for connection state and TTL
+                'ct_dst_ltm': 0,  # Placeholder for connection count to destination in last time window
+                'ct_src_dport_ltm': 0,  # Placeholder for connection count from source to destination port in last time window
+                'ct_dst_sport_ltm': 0,  # Placeholder for connection count from destination to source port in last time window
+                'ct_dst_src_ltm': 0,  # Placeholder for connection count from destination to source in last time window
+                'is_ftp_login': 0,  # Placeholder for FTP login
+                'ct_ftp_cmd': 0,  # Placeholder for FTP command count
+                'ct_flw_http_mthd': 0,  # Placeholder for HTTP method count
+                'ct_src_ltm': 0,  # Placeholder for connection count from source in last time window
+                'ct_srv_dst': 0,  # Placeholder for connection count to service from destination
+                'is_sm_ips_ports': 1 if IP in pkt and pkt[IP].src == pkt[IP].dst and pkt.sport == pkt.dport else 0,
+                'label': 0  # Placeholder for binary label
             }
             data.append(row)
+        else:
+            # Skip non-IP packets
+            continue
 
-    # Convert the list of features to a DataFrame
+    # Convert the list of dictionaries to a DataFrame
     df = pd.DataFrame(data)
 
     # Save the DataFrame to a CSV file
     df.to_csv(output_csv, index=False)
     print(f"Features extracted and saved to {output_csv}")
 
+
 def extract_features():
     # Path to the input PCAP file
-    pcap_file = "/home/martin/Original Network Traffic and Log data/Friday-02-03-2018/pcap/capDESKTOP-AN3U28N-172.31.64.17"  # Replace with your PCAP file path
+    pcap_file = "/home/martin/Original Network Traffic and Log data/Friday-02-03-2018/pcap/capWIN-J6GMIG1DQE5-172.31.67.62"  # Replace with your PCAP file path
 
     # Path to the output CSV file
     output_csv = "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/combined_Friday02032018.csv"  # Replace with your desired output path
