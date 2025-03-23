@@ -1,4 +1,4 @@
 Summary of Predictions:
 prediction
-1    897741
-0    378471
+0    1676134
+1     158091

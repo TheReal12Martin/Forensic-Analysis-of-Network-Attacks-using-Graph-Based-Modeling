@@ -1,18 +1,17 @@
 import os
-from scapy.all import *
-from scapy.layers.inet import IP, TCP, UDP
-from scapy.layers.inet6 import IPv6
+from scapy.all import PcapReader, IP, TCP, UDP, IPv6, Raw
 import pandas as pd
 from tqdm import tqdm  # For progress bar
 
 def extract_pcap_features(pcap_file, output_csv):
     """Extract features from a single PCAP file."""
-    # Read the PCAP file
-    packets = rdpcap(pcap_file)
+    # Use PcapReader for streaming packets
+    packets = PcapReader(pcap_file)
     data = []
+    last_packet_time = None  # Track the last packet time for duration calculation
 
     # Iterate over packets with a progress bar
-    for i, pkt in tqdm(enumerate(packets), total=len(packets), desc="Processing packets"):
+    for i, pkt in tqdm(enumerate(packets), desc="Processing packets"):
         # Check if the packet has an IP layer (IPv4 or IPv6)
         if IP in pkt or IPv6 in pkt:
             row = {
@@ -22,7 +21,7 @@ def extract_pcap_features(pcap_file, output_csv):
                 'dsport': pkt.dport if TCP in pkt or UDP in pkt else 0,
                 'proto': pkt[IP].proto if IP in pkt else pkt[IPv6].nh,
                 'state': 'ESTABLISHED' if TCP in pkt and pkt[TCP].flags == 0x18 else 'OTHER',
-                'dur': pkt.time if i == 0 else pkt.time - packets[i-1].time,
+                'dur': pkt.time if i == 0 else pkt.time - last_packet_time,
                 'sbytes': len(pkt[IP].payload) if IP in pkt and Raw in pkt else len(pkt[IPv6].payload) if IPv6 in pkt and Raw in pkt else 0,
                 'dbytes': 0,  # Placeholder for destination bytes
                 'sttl': pkt[IP].ttl if IP in pkt else pkt[IPv6].hlim,
@@ -31,8 +30,8 @@ def extract_pcap_features(pcap_file, output_csv):
                 'dloss': 0,  # Placeholder for destination packet loss
                 'service': 'http' if TCP in pkt and pkt[TCP].dport == 80 else '-',
                 'sload': 0,  # Placeholder for source load
-                'dload': 0,  # Placeholder for destination load
-                'sinpkt': 0 if i == 0 else pkt.time - packets[i-1].time,
+                'dload': 0,  # Placeholder for destination load,
+                'sinpkt': 0 if i == 0 else pkt.time - last_packet_time,
                 'dinpkt': 0,  # Placeholder for destination inter-packet arrival time
                 'sjit': 0,  # Placeholder for source jitter
                 'djit': 0,  # Placeholder for destination jitter
@@ -62,9 +61,7 @@ def extract_pcap_features(pcap_file, output_csv):
                 'label': 0  # Placeholder for binary label
             }
             data.append(row)
-        else:
-            # Skip non-IP packets
-            continue
+            last_packet_time = pkt.time  # Update the last packet time
 
     # Convert the list of dictionaries to a DataFrame
     df = pd.DataFrame(data)
@@ -76,7 +73,7 @@ def extract_pcap_features(pcap_file, output_csv):
 
 def extract_features():
     # Path to the input PCAP file
-    pcap_file = "/home/martin/Original Network Traffic and Log data/Friday-02-03-2018/pcap/capWIN-J6GMIG1DQE5-172.31.67.62"  # Replace with your PCAP file path
+    pcap_file = "/home/martin/Original Network Traffic and Log data/Friday-02-03-2018/pcap/capPC1-172.31.65.77"  # Replace with your PCAP file path
 
     # Path to the output CSV file
     output_csv = "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/combined_Friday02032018.csv"  # Replace with your desired output path
