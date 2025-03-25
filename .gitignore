@@ -1,3 +1,5 @@
 CSVs/
 __pycache__/
 utils/__pycache__/
+Miniconda3-latest-Linux-x86_64.sh
+cuda-repo-fedora41-12-8-local-12.8.1_570.124.06-1.x86_64.rpm
