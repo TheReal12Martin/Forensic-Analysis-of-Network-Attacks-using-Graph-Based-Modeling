@@ -44,7 +44,6 @@ def loadAndProcesData(data_csv, features_csv):
     # Exclude non-numeric columns (e.g., IP addresses, labels) from features
     non_numeric_columns = ['srcip', 'sport', 'dstip', 'dsport', 'attack_cat', 'Label']  # Use 'Label' instead of 'label'
     features = raw_data.drop(columns=non_numeric_columns)
-    
     # Encode labels
     label_encoder = LabelEncoder()
     labels = label_encoder.fit_transform(raw_data['Label'])  # Use 'Label' instead of 'label'

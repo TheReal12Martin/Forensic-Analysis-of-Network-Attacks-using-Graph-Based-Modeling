@@ -1,85 +1,245 @@
 import os
-from scapy.all import PcapReader, IP, TCP, UDP, IPv6, Raw
+import dpkt
+import socket
 import pandas as pd
-from tqdm import tqdm  # For progress bar
+from tqdm import tqdm
+import numpy as np
+import gc
+from collections import defaultdict
+import logging
 
-def extract_pcap_features(pcap_file, output_csv):
-    """Extract features from a single PCAP file."""
-    # Use PcapReader for streaming packets
-    packets = PcapReader(pcap_file)
-    data = []
-    last_packet_time = None  # Track the last packet time for duration calculation
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-    # Iterate over packets with a progress bar
-    for i, pkt in tqdm(enumerate(packets), desc="Processing packets"):
-        # Check if the packet has an IP layer (IPv4 or IPv6)
-        if IP in pkt or IPv6 in pkt:
-            row = {
-                'srcip': pkt[IP].src if IP in pkt else pkt[IPv6].src,
-                'sport': pkt.sport if TCP in pkt or UDP in pkt else 0,
-                'dstip': pkt[IP].dst if IP in pkt else pkt[IPv6].dst,
-                'dsport': pkt.dport if TCP in pkt or UDP in pkt else 0,
-                'proto': pkt[IP].proto if IP in pkt else pkt[IPv6].nh,
-                'state': 'ESTABLISHED' if TCP in pkt and pkt[TCP].flags == 0x18 else 'OTHER',
-                'dur': pkt.time if i == 0 else pkt.time - last_packet_time,
-                'sbytes': len(pkt[IP].payload) if IP in pkt and Raw in pkt else len(pkt[IPv6].payload) if IPv6 in pkt and Raw in pkt else 0,
-                'dbytes': 0,  # Placeholder for destination bytes
-                'sttl': pkt[IP].ttl if IP in pkt else pkt[IPv6].hlim,
-                'dttl': pkt[IP].ttl if IP in pkt else pkt[IPv6].hlim,
-                'sloss': 0,  # Placeholder for source packet loss
-                'dloss': 0,  # Placeholder for destination packet loss
-                'service': 'http' if TCP in pkt and pkt[TCP].dport == 80 else '-',
-                'sload': 0,  # Placeholder for source load
-                'dload': 0,  # Placeholder for destination load,
-                'sinpkt': 0 if i == 0 else pkt.time - last_packet_time,
-                'dinpkt': 0,  # Placeholder for destination inter-packet arrival time
-                'sjit': 0,  # Placeholder for source jitter
-                'djit': 0,  # Placeholder for destination jitter
-                'swin': pkt[TCP].window if TCP in pkt else 0,
-                'stcpb': pkt[TCP].seq if TCP in pkt else 0,
-                'dtcpb': pkt[TCP].seq if TCP in pkt else 0,
-                'dwin': pkt[TCP].window if TCP in pkt else 0,
-                'tcprtt': 0,  # Placeholder for TCP RTT
-                'synack': 0,  # Placeholder for SYN-ACK time
-                'ackdat': 0,  # Placeholder for ACK data time
-                'smean': 0,  # Placeholder for source mean packet size
-                'dmean': 0,  # Placeholder for destination mean packet size
-                'trans_depth': 0,  # Placeholder for transaction depth
-                'response_body_len': 0,  # Placeholder for response body length
-                'ct_srv_src': 0,  # Placeholder for connection count from source to service
-                'ct_state_ttl': 0,  # Placeholder for connection state and TTL
-                'ct_dst_ltm': 0,  # Placeholder for connection count to destination in last time window
-                'ct_src_dport_ltm': 0,  # Placeholder for connection count from source to destination port in last time window
-                'ct_dst_sport_ltm': 0,  # Placeholder for connection count from destination to source port in last time window
-                'ct_dst_src_ltm': 0,  # Placeholder for connection count from destination to source in last time window
-                'is_ftp_login': 0,  # Placeholder for FTP login
-                'ct_ftp_cmd': 0,  # Placeholder for FTP command count
-                'ct_flw_http_mthd': 0,  # Placeholder for HTTP method count
-                'ct_src_ltm': 0,  # Placeholder for connection count from source in last time window
-                'ct_srv_dst': 0,  # Placeholder for connection count to service from destination
-                'is_sm_ips_ports': 1 if IP in pkt and pkt[IP].src == pkt[IP].dst and pkt.sport == pkt.dport else 0,
-                'label': 0  # Placeholder for binary label
-            }
-            data.append(row)
-            last_packet_time = pkt.time  # Update the last packet time
+# Configuration - Exactly 43 features
+FEATURE_NAMES = [
+    'srcip', 'sport', 'dstip', 'dsport', 'proto', 'state', 'dur', 'sbytes', 'dbytes',
+    'sttl', 'dttl', 'sloss', 'dloss', 'service', 'sload', 'dload', 'sinpkt', 'dinpkt',
+    'sjit', 'djit', 'swin', 'dwin', 'stcpb', 'dtcpb', 'smeansz', 'dmeansz', 'trans_depth',
+    'response_body_len', 'ct_srv_src', 'ct_state_ttl', 'ct_dst_ltm', 'ct_src_dport_ltm',
+    'ct_dst_sport_ltm', 'ct_dst_src_ltm', 'is_ftp_login', 'ct_ftp_cmd', 'ct_flw_http_mthd',
+    'ct_src_ltm', 'ct_srv_dst', 'is_sm_ips_ports', 'label'
+]
 
-    # Convert the list of dictionaries to a DataFrame
-    df = pd.DataFrame(data)
+class ConnectionTracker:
+    def __init__(self):
+        self.connections = defaultdict(self._create_connection)
+        self.flow_stats = defaultdict(self._create_flow_stats)
+    
+    @staticmethod
+    def _create_connection():
+        return {
+            'src_pkts': 0, 'dst_pkts': 0, 'src_bytes': 0, 'dst_bytes': 0,
+            'start_time': None, 'last_time': None, 'intervals': []
+        }
+    
+    @staticmethod
+    def _create_flow_stats():
+        return {
+            'ct_srv_src': 0, 'ct_state_ttl': 0, 'ct_dst_ltm': 0,
+            'ct_src_dport_ltm': 0, 'ct_dst_sport_ltm': 0, 'ct_dst_src_ltm': 0,
+            'ct_ftp_cmd': 0, 'ct_flw_http_mthd': 0, 'ct_src_ltm': 0,
+            'ct_srv_dst': 0
+        }
 
-    # Save the DataFrame to a CSV file
-    df.to_csv(output_csv, index=False)
-    print(f"Features extracted and saved to {output_csv}")
+def get_protocol_name(proto_num):
+    """Convert IP protocol number to human-readable name"""
+    protocol_map = {
+        1: 'icmp',
+        6: 'tcp', 
+        17: 'udp',
+        2: 'igmp',
+        47: 'gre',
+        50: 'esp',
+        51: 'ah',
+        58: 'icmp6'
+    }
+    return protocol_map.get(proto_num, f'unknown({proto_num})')
 
+def get_service_name(dport, proto):
+    if proto == 'tcp':
+        if dport == 80: return 'http'
+        if dport == 443: return 'ssl'
+        if dport == 22: return 'ssh'
+        if dport == 21: return 'ftp'
+    elif proto == 'udp':
+        if dport == 53: return 'dns'
+        if dport == 123: return 'ntp'
+    return '-'
+
+def get_connection_state(tcp_flags):
+    if not tcp_flags: return 'OTH'
+    if tcp_flags & dpkt.tcp.TH_SYN and tcp_flags & dpkt.tcp.TH_ACK: return 'S2'
+    if tcp_flags & dpkt.tcp.TH_ACK: return 'S1'
+    return 'REQ'
+
+def update_flow_stats(conn_tracker, src_ip, dst_ip, sport, dport, proto, service):
+    """Update connection count statistics"""
+    conn_tracker.flow_stats[(src_ip, service)]['ct_srv_src'] += 1
+    conn_tracker.flow_stats[(src_ip, dst_ip)]['ct_dst_ltm'] += 1
+    conn_tracker.flow_stats[(src_ip, dport)]['ct_src_dport_ltm'] += 1
+    conn_tracker.flow_stats[(dst_ip, sport)]['ct_dst_sport_ltm'] += 1
+    conn_tracker.flow_stats[(dst_ip, src_ip)]['ct_dst_src_ltm'] += 1
+    conn_tracker.flow_stats[src_ip]['ct_src_ltm'] += 1
+    conn_tracker.flow_stats[(service, dst_ip)]['ct_srv_dst'] += 1
+
+def initialize_features():
+    """Initialize all 43 features with default values"""
+    return {name: 0 for name in FEATURE_NAMES}
+
+def process_packet(ts, pkt, conn_tracker):
+    features = initialize_features()
+    
+    try:
+        eth = dpkt.ethernet.Ethernet(pkt)
+        ip = eth.data if isinstance(eth.data, (dpkt.ip.IP, dpkt.ip6.IP6)) else None
+        if not ip:
+            return features
+
+        src_ip = socket.inet_ntoa(ip.src) if isinstance(ip, dpkt.ip.IP) else ip.src
+        dst_ip = socket.inet_ntoa(ip.dst) if isinstance(ip, dpkt.ip.IP) else ip.dst
+        proto_num = ip.p
+        proto = get_protocol_name(proto_num)
+        
+        transport = ip.data
+        sport = dport = 0
+        tcp_flags = 0
+        if isinstance(transport, (dpkt.tcp.TCP, dpkt.udp.UDP)):
+            sport, dport = transport.sport, transport.dport
+            if isinstance(transport, dpkt.tcp.TCP):
+                tcp_flags = transport.flags
+        
+        # Connection tracking
+        conn_key = (src_ip, sport, dst_ip, dport, proto)
+        conn = conn_tracker.connections[conn_key]
+        
+        current_time = float(ts)
+        if conn['start_time'] is None:
+            conn['start_time'] = current_time
+            conn['last_time'] = current_time
+            duration = 0.0  # First packet in connection has duration 0
+        else:
+            duration = current_time - conn['start_time']
+            conn['last_time'] = current_time
+        
+        # Packet size
+        pkt_size = len(transport) if transport else 0
+        conn['src_pkts'] += 1
+        conn['src_bytes'] += pkt_size
+        
+        # Service and state
+        service = get_service_name(dport, proto)
+        state = get_connection_state(tcp_flags)
+        
+        # Update flow statistics
+        update_flow_stats(conn_tracker, src_ip, dst_ip, sport, dport, proto, service)
+        
+        # Calculate features
+        intervals = conn['intervals']
+        mean_interval = np.mean(intervals) if intervals else 0
+        sjit = np.std(intervals) if len(intervals) > 1 else 0
+        sload = pkt_size / duration if duration > 0 else 0
+        
+        # Get flow stats
+        flow_stats = conn_tracker.flow_stats
+        
+        # Populate all 43 features
+        features.update({
+            'srcip': hash(src_ip) % (2**32),
+            'sport': sport,
+            'dstip': hash(dst_ip) % (2**32),
+            'dsport': dport,
+            'proto': proto_num,
+            'state': 1 if state == 'S1' else (2 if state == 'S2' else 0),
+            'dur': duration,
+            'sbytes': pkt_size,
+            'dbytes': 0,
+            'sttl': ip.ttl if hasattr(ip, 'ttl') else 64,
+            'dttl': 0,
+            'sloss': 0,
+            'dloss': 0,
+            'service': 1 if service == 'http' else (2 if service == 'ssl' else 0),
+            'sload': sload,
+            'dload': 0,
+            'sinpkt': mean_interval,
+            'dinpkt': 0,
+            'sjit': sjit,
+            'djit': 0,
+            'swin': transport.window if hasattr(transport, 'window') else 0,
+            'dwin': 0,
+            'stcpb': transport.seq if hasattr(transport, 'seq') else 0,
+            'dtcpb': 0,
+            'smeansz': conn['src_bytes'] / conn['src_pkts'] if conn['src_pkts'] > 0 else 0,
+            'dmeansz': 0,
+            'trans_depth': 0,
+            'response_body_len': 0,
+            'ct_srv_src': flow_stats[(src_ip, service)]['ct_srv_src'],
+            'ct_state_ttl': 0,
+            'ct_dst_ltm': flow_stats[(src_ip, dst_ip)]['ct_dst_ltm'],
+            'ct_src_dport_ltm': flow_stats[(src_ip, dport)]['ct_src_dport_ltm'],
+            'ct_dst_sport_ltm': flow_stats[(dst_ip, sport)]['ct_dst_sport_ltm'],
+            'ct_dst_src_ltm': flow_stats[(dst_ip, src_ip)]['ct_dst_src_ltm'],
+            'is_ftp_login': 1 if service == 'ftp' and pkt_size > 0 else 0,
+            'ct_ftp_cmd': flow_stats[(src_ip, 'ftp')]['ct_ftp_cmd'],
+            'ct_flw_http_mthd': flow_stats[(src_ip, 'http')]['ct_flw_http_mthd'],
+            'ct_src_ltm': flow_stats[src_ip]['ct_src_ltm'],
+            'ct_srv_dst': flow_stats[(service, dst_ip)]['ct_srv_dst'],
+            'is_sm_ips_ports': 1 if src_ip == dst_ip and sport == dport else 0,
+            'label': 0
+        })
+        
+    except Exception as e:
+        logger.error(f"Error processing packet: {e}")
+        return initialize_features()
+    
+    return features
+
+def extract_pcap(pcap_file, output_csv):
+    if not os.path.exists(pcap_file):
+        logger.error(f"Input file not found: {pcap_file}")
+        return
+    
+    os.makedirs(os.path.dirname(output_csv), exist_ok=True)
+    
+    conn_tracker = ConnectionTracker()
+    batch_data = []
+    
+    with open(pcap_file, 'rb') as f:
+        pcap = dpkt.pcap.Reader(f)
+        total_packets = sum(1 for _ in pcap)
+    
+    with open(pcap_file, 'rb') as f, open(output_csv, 'w') as out_file:
+        pcap = dpkt.pcap.Reader(f)
+        writer = None
+        
+        for ts, buf in tqdm(pcap, total=total_packets, desc="Processing packets"):
+            features = process_packet(ts, buf, conn_tracker)
+            batch_data.append(features)
+            
+            if len(batch_data) >= 50000:
+                df = pd.DataFrame(batch_data)
+                # Ensure exactly 43 columns
+                df = df.reindex(columns=FEATURE_NAMES).fillna(0)
+                if writer is None:
+                    df.to_csv(out_file, index=False)
+                    writer = True
+                else:
+                    df.to_csv(out_file, mode='a', header=False, index=False)
+                batch_data = []
+                gc.collect()
+        
+        if batch_data:
+            df = pd.DataFrame(batch_data).reindex(columns=FEATURE_NAMES).fillna(0)
+            df.to_csv(out_file, mode='a', header=False, index=False)
 
 def extract_features():
-    # Path to the input PCAP file
-    pcap_file = "/home/martin/Original Network Traffic and Log data/Friday-02-03-2018/pcap/capPC1-172.31.65.77"  # Replace with your PCAP file path
+    pcap_file = "/home/martin/Original Network Traffic and Log data/Friday-02-03-2018/pcap/capPC1-172.31.65.77"
+    output_csv = "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/combined_Friday02032018.csv"
+    
+    logger.info("Starting feature extraction...")
+    extract_pcap(pcap_file, output_csv)
+    logger.info(f"Feature extraction complete. Results saved to {output_csv}")
 
-    # Path to the output CSV file
-    output_csv = "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/combined_Friday02032018.csv"  # Replace with your desired output path
-
-    # Ensure the output directory exists
-    os.makedirs(os.path.dirname(output_csv), exist_ok=True)
-
-    # Extract features from the PCAP file
-    extract_pcap_features(pcap_file, output_csv)
+if __name__ == "__main__":
+    extract_features()
