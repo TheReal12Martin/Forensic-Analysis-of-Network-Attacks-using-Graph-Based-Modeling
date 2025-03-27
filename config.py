@@ -15,4 +15,3 @@ class Config:
     TRAIN_RATIO = 0.7
     VAL_RATIO = 0.15
     TEST_RATIO = 0.15
-

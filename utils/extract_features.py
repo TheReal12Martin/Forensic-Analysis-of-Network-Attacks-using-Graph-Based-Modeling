@@ -7,13 +7,14 @@ import numpy as np
 import gc
 from collections import defaultdict
 import logging
+import hashlib
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configuration - Exactly 43 features
-FEATURE_NAMES = [
+# Final 43 features that MUST match the model
+FINAL_FEATURES = [
     'srcip', 'sport', 'dstip', 'dsport', 'proto', 'state', 'dur', 'sbytes', 'dbytes',
     'sttl', 'dttl', 'sloss', 'dloss', 'service', 'sload', 'dload', 'sinpkt', 'dinpkt',
     'sjit', 'djit', 'swin', 'dwin', 'stcpb', 'dtcpb', 'smeansz', 'dmeansz', 'trans_depth',
@@ -43,30 +44,30 @@ class ConnectionTracker:
             'ct_srv_dst': 0
         }
 
+def ip_to_numeric(ip):
+    """Convert IP address to consistent numeric value"""
+    if isinstance(ip, bytes):
+        try:
+            ip_str = socket.inet_ntoa(ip)
+        except:
+            ip_str = str(ip)
+    else:
+        ip_str = str(ip)
+    return int(hashlib.md5(ip_str.encode('utf-8')).hexdigest()[:8], 16) % (2**32)
+
 def get_protocol_name(proto_num):
-    """Convert IP protocol number to human-readable name"""
     protocol_map = {
-        1: 'icmp',
-        6: 'tcp', 
-        17: 'udp',
-        2: 'igmp',
-        47: 'gre',
-        50: 'esp',
-        51: 'ah',
-        58: 'icmp6'
+        1: 'icmp', 6: 'tcp', 17: 'udp', 2: 'igmp',
+        47: 'gre', 50: 'esp', 51: 'ah', 58: 'icmp6'
     }
     return protocol_map.get(proto_num, f'unknown({proto_num})')
 
 def get_service_name(dport, proto):
-    if proto == 'tcp':
-        if dport == 80: return 'http'
-        if dport == 443: return 'ssl'
-        if dport == 22: return 'ssh'
-        if dport == 21: return 'ftp'
-    elif proto == 'udp':
-        if dport == 53: return 'dns'
-        if dport == 123: return 'ntp'
-    return '-'
+    service_map = {
+        'tcp': {80: 'http', 443: 'ssl', 22: 'ssh', 21: 'ftp'},
+        'udp': {53: 'dns', 123: 'ntp'}
+    }
+    return service_map.get(proto, {}).get(dport, '-')
 
 def get_connection_state(tcp_flags):
     if not tcp_flags: return 'OTH'
@@ -75,7 +76,6 @@ def get_connection_state(tcp_flags):
     return 'REQ'
 
 def update_flow_stats(conn_tracker, src_ip, dst_ip, sport, dport, proto, service):
-    """Update connection count statistics"""
     conn_tracker.flow_stats[(src_ip, service)]['ct_srv_src'] += 1
     conn_tracker.flow_stats[(src_ip, dst_ip)]['ct_dst_ltm'] += 1
     conn_tracker.flow_stats[(src_ip, dport)]['ct_src_dport_ltm'] += 1
@@ -83,10 +83,10 @@ def update_flow_stats(conn_tracker, src_ip, dst_ip, sport, dport, proto, service
     conn_tracker.flow_stats[(dst_ip, src_ip)]['ct_dst_src_ltm'] += 1
     conn_tracker.flow_stats[src_ip]['ct_src_ltm'] += 1
     conn_tracker.flow_stats[(service, dst_ip)]['ct_srv_dst'] += 1
+    conn_tracker.flow_stats[(src_ip, dst_ip)]['ct_state_ttl'] += 1
 
 def initialize_features():
-    """Initialize all 43 features with default values"""
-    return {name: 0 for name in FEATURE_NAMES}
+    return {name: 0 for name in FINAL_FEATURES}
 
 def process_packet(ts, pkt, conn_tracker):
     features = initialize_features()
@@ -97,8 +97,9 @@ def process_packet(ts, pkt, conn_tracker):
         if not ip:
             return features
 
-        src_ip = socket.inet_ntoa(ip.src) if isinstance(ip, dpkt.ip.IP) else ip.src
-        dst_ip = socket.inet_ntoa(ip.dst) if isinstance(ip, dpkt.ip.IP) else ip.dst
+        # Handle both IPv4 and IPv6
+        src_ip = ip.src if isinstance(ip, dpkt.ip.IP) else ip.src
+        dst_ip = ip.dst if isinstance(ip, dpkt.ip.IP) else ip.dst
         proto_num = ip.p
         proto = get_protocol_name(proto_num)
         
@@ -117,38 +118,31 @@ def process_packet(ts, pkt, conn_tracker):
         current_time = float(ts)
         if conn['start_time'] is None:
             conn['start_time'] = current_time
-            conn['last_time'] = current_time
-            duration = 0.0  # First packet in connection has duration 0
+            duration = 0.0
         else:
             duration = current_time - conn['start_time']
-            conn['last_time'] = current_time
+        conn['last_time'] = current_time
         
-        # Packet size
+        # Packet processing
         pkt_size = len(transport) if transport else 0
         conn['src_pkts'] += 1
         conn['src_bytes'] += pkt_size
         
-        # Service and state
+        # Feature calculation
         service = get_service_name(dport, proto)
         state = get_connection_state(tcp_flags)
-        
-        # Update flow statistics
         update_flow_stats(conn_tracker, src_ip, dst_ip, sport, dport, proto, service)
         
-        # Calculate features
         intervals = conn['intervals']
         mean_interval = np.mean(intervals) if intervals else 0
         sjit = np.std(intervals) if len(intervals) > 1 else 0
         sload = pkt_size / duration if duration > 0 else 0
         
-        # Get flow stats
-        flow_stats = conn_tracker.flow_stats
-        
         # Populate all 43 features
         features.update({
-            'srcip': hash(src_ip) % (2**32),
+            'srcip': ip_to_numeric(src_ip),
             'sport': sport,
-            'dstip': hash(dst_ip) % (2**32),
+            'dstip': ip_to_numeric(dst_ip),
             'dsport': dport,
             'proto': proto_num,
             'state': 1 if state == 'S1' else (2 if state == 'S2' else 0),
@@ -156,7 +150,7 @@ def process_packet(ts, pkt, conn_tracker):
             'sbytes': pkt_size,
             'dbytes': 0,
             'sttl': ip.ttl if hasattr(ip, 'ttl') else 64,
-            'dttl': 0,
+            'dttl': ip.ttl if hasattr(ip, 'ttl') else 64,
             'sloss': 0,
             'dloss': 0,
             'service': 1 if service == 'http' else (2 if service == 'ssl' else 0),
@@ -172,19 +166,19 @@ def process_packet(ts, pkt, conn_tracker):
             'dtcpb': 0,
             'smeansz': conn['src_bytes'] / conn['src_pkts'] if conn['src_pkts'] > 0 else 0,
             'dmeansz': 0,
-            'trans_depth': 0,
-            'response_body_len': 0,
-            'ct_srv_src': flow_stats[(src_ip, service)]['ct_srv_src'],
-            'ct_state_ttl': 0,
-            'ct_dst_ltm': flow_stats[(src_ip, dst_ip)]['ct_dst_ltm'],
-            'ct_src_dport_ltm': flow_stats[(src_ip, dport)]['ct_src_dport_ltm'],
-            'ct_dst_sport_ltm': flow_stats[(dst_ip, sport)]['ct_dst_sport_ltm'],
-            'ct_dst_src_ltm': flow_stats[(dst_ip, src_ip)]['ct_dst_src_ltm'],
+            'trans_depth': 1 if tcp_flags & dpkt.tcp.TH_SYN else 0,
+            'response_body_len': pkt_size,
+            'ct_srv_src': conn_tracker.flow_stats[(src_ip, service)]['ct_srv_src'],
+            'ct_state_ttl': conn_tracker.flow_stats[(src_ip, dst_ip)]['ct_state_ttl'],
+            'ct_dst_ltm': conn_tracker.flow_stats[(src_ip, dst_ip)]['ct_dst_ltm'],
+            'ct_src_dport_ltm': conn_tracker.flow_stats[(src_ip, dport)]['ct_src_dport_ltm'],
+            'ct_dst_sport_ltm': conn_tracker.flow_stats[(dst_ip, sport)]['ct_dst_sport_ltm'],
+            'ct_dst_src_ltm': conn_tracker.flow_stats[(dst_ip, src_ip)]['ct_dst_src_ltm'],
             'is_ftp_login': 1 if service == 'ftp' and pkt_size > 0 else 0,
-            'ct_ftp_cmd': flow_stats[(src_ip, 'ftp')]['ct_ftp_cmd'],
-            'ct_flw_http_mthd': flow_stats[(src_ip, 'http')]['ct_flw_http_mthd'],
-            'ct_src_ltm': flow_stats[src_ip]['ct_src_ltm'],
-            'ct_srv_dst': flow_stats[(service, dst_ip)]['ct_srv_dst'],
+            'ct_ftp_cmd': conn_tracker.flow_stats[(src_ip, 'ftp')]['ct_ftp_cmd'],
+            'ct_flw_http_mthd': conn_tracker.flow_stats[(src_ip, 'http')]['ct_flw_http_mthd'],
+            'ct_src_ltm': conn_tracker.flow_stats[src_ip]['ct_src_ltm'],
+            'ct_srv_dst': conn_tracker.flow_stats[(service, dst_ip)]['ct_srv_dst'],
             'is_sm_ips_ports': 1 if src_ip == dst_ip and sport == dport else 0,
             'label': 0
         })
@@ -219,8 +213,14 @@ def extract_pcap(pcap_file, output_csv):
             
             if len(batch_data) >= 50000:
                 df = pd.DataFrame(batch_data)
-                # Ensure exactly 43 columns
-                df = df.reindex(columns=FEATURE_NAMES).fillna(0)
+                # Ensure we have exactly 43 features
+                missing = set(FINAL_FEATURES) - set(df.columns)
+                if missing:
+                    logger.error(f"Missing features in batch: {missing}")
+                    for feat in missing:
+                        df[feat] = 0
+                df = df[FINAL_FEATURES]
+                
                 if writer is None:
                     df.to_csv(out_file, index=False)
                     writer = True
@@ -230,8 +230,21 @@ def extract_pcap(pcap_file, output_csv):
                 gc.collect()
         
         if batch_data:
-            df = pd.DataFrame(batch_data).reindex(columns=FEATURE_NAMES).fillna(0)
+            df = pd.DataFrame(batch_data)
+            missing = set(FINAL_FEATURES) - set(df.columns)
+            if missing:
+                logger.error(f"Missing features in final batch: {missing}")
+                for feat in missing:
+                    df[feat] = 0
+            df = df[FINAL_FEATURES]
             df.to_csv(out_file, mode='a', header=False, index=False)
+    
+    # Final verification
+    df_check = pd.read_csv(output_csv)
+    if len(df_check.columns) != len(FINAL_FEATURES):
+        logger.error(f"Feature count mismatch. Expected {len(FINAL_FEATURES)}, got {len(df_check.columns)}")
+        raise ValueError("Output CSV has incorrect number of features")
+    logger.info(f"Successfully extracted {len(df_check)} records with {len(df_check.columns)} features")
 
 def extract_features():
     pcap_file = "/home/martin/Original Network Traffic and Log data/Friday-02-03-2018/pcap/capPC1-172.31.65.77"

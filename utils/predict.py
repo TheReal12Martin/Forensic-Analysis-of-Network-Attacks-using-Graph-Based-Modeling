@@ -13,6 +13,7 @@ from collections import defaultdict
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Must match exactly with extract_features.py
 MODEL_FEATURES = [
     'srcip', 'sport', 'dstip', 'dsport', 'proto', 'state', 'dur', 'sbytes', 'dbytes',
     'sttl', 'dttl', 'sloss', 'dloss', 'service', 'sload', 'dload', 'sinpkt', 'dinpkt',
@@ -22,21 +23,33 @@ MODEL_FEATURES = [
     'ct_src_ltm', 'ct_srv_dst', 'is_sm_ips_ports', 'label'
 ]
 
-def create_ip_graph(df):
-    """Create graph with IP-only nodes while preserving all features"""
-    G = nx.Graph()
-    ip_to_idx = {}
-    ip_features = defaultdict(list)
-    
-    # Verify features without logging empty sets
+def enforce_feature_count(df):
+    """Ensure dataframe has exactly 43 expected features"""
+    # Add missing features with default values
     missing_features = set(MODEL_FEATURES) - set(df.columns)
     if missing_features:
-        logger.warning(f"Adding {len(missing_features)} missing features")
+        logger.warning(f"Adding missing features: {missing_features}")
         for feat in missing_features:
             df[feat] = 0
     
-    # Ensure correct feature order
-    df = df[MODEL_FEATURES]
+    # Drop extra features
+    extra_features = set(df.columns) - set(MODEL_FEATURES)
+    if extra_features:
+        logger.warning(f"Dropping extra features: {extra_features}")
+        df = df[MODEL_FEATURES]
+    
+    if len(df.columns) != len(MODEL_FEATURES):
+        raise ValueError(f"Feature count mismatch. Expected {len(MODEL_FEATURES)}, got {len(df.columns)}")
+    
+    return df
+
+def create_ip_graph(df):
+    # Enforce feature count before processing
+    df = enforce_feature_count(df)
+    
+    G = nx.Graph()
+    ip_to_idx = {}
+    ip_features = defaultdict(list)
     
     for _, row in tqdm(df.iterrows(), total=len(df), desc="Building IP graph"):
         src_ip = row['srcip']
@@ -63,7 +76,7 @@ def create_ip_graph(df):
         if ip_features[ip]:
             node_features[idx] = np.mean(ip_features[ip], axis=0)
     
-    logger.info(f"Created graph with {len(ip_to_idx)} IP nodes and {len(G.edges())} edges")
+    logger.info(f"Created graph with {len(ip_to_idx)} nodes and {len(G.edges())} edges")
     return G, node_features, ip_to_idx
 
 def predict_on_csv(input_csv, model_path):
@@ -71,8 +84,13 @@ def predict_on_csv(input_csv, model_path):
     logger.info(f"Using device: {device}")
     
     try:
+        # Load and strictly verify data
+        logger.info(f"Loading data from {input_csv}")
         df = pd.read_csv(input_csv)
-        logger.info(f"Loaded {len(df)} records")
+        logger.info(f"Initial features: {len(df.columns)}")
+        
+        df = enforce_feature_count(df)
+        logger.info(f"Features after enforcement: {len(df.columns)}")
         
         # Create IP-based graph
         graph, node_features, ip_to_idx = create_ip_graph(df)
@@ -90,8 +108,18 @@ def predict_on_csv(input_csv, model_path):
             heads=Config.HEADS
         ).to(device)
         
-        model.load_state_dict(torch.load(model_path, map_location=device))
+        # Verify model dimensions
+        state_dict = torch.load(model_path, map_location=device)
+        expected_features = state_dict['conv1.lin.weight'].shape[1]
+        if expected_features != len(MODEL_FEATURES):
+            raise ValueError(
+                f"Model expects {expected_features} features but we have {len(MODEL_FEATURES)}. "
+                "Please retrain model with correct feature count."
+            )
+        
+        model.load_state_dict(state_dict)
         model.eval()
+        logger.info("Model loaded successfully")
         
         # Predict
         with torch.no_grad():
@@ -107,10 +135,14 @@ def predict_on_csv(input_csv, model_path):
         results.to_csv(output_csv, index=False)
         logger.info(f"Predictions saved to {output_csv}")
         
+        return output_csv
+        
     except Exception as e:
         logger.error(f"Prediction failed: {e}")
         raise
 
 if __name__ == "__main__":
-    predict_on_csv("/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/combined_Friday02032018.csv", 
-                  "gat_network_security_model.pth")
+    predict_on_csv(
+        "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/combined_Friday02032018.csv",
+        "gat_network_security_model.pth"
+    )
