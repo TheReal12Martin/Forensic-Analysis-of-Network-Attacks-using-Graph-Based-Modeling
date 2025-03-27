@@ -27,7 +27,7 @@ def train():
 
         # Build graph
         print("\n=== Graph Construction ===")
-        graph = construct_graph(features, labels, raw_data)
+        graph, ip_mapping = construct_graph(features, labels, raw_data)
         
         # Convert to PyG format
         print("\n=== PyG Conversion ===")
@@ -123,7 +123,7 @@ def train():
         plt.savefig('training_curves.png')
         
         print(f"\nTraining completed. Best validation accuracy: {best_acc:.4f}")
-        return model, data, raw_data
+        return model, data, raw_data, ip_mapping
 
     except Exception as e:
         print(f"\nTraining failed: {str(e)}", file=sys.stderr)
