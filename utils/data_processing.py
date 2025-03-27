@@ -6,115 +6,114 @@ from sklearn.utils.class_weight import compute_class_weight
 from torch_geometric.data import Data
 import torch
 from collections import Counter
+import warnings
 
-def loadAndProcesData(data_csv, features_csv):
-    # Load the feature names with the correct encoding
+def loadAndProcessData(data_csv, features_csv):
+    """Load data with strict ISO-8859-1 encoding and robust validation"""
     try:
-        feature_names = pd.read_csv(features_csv, encoding='ISO-8859-1')['Name'].tolist()
-    except UnicodeDecodeError:
-        # Try other common encodings if the first one fails
-        feature_names = pd.read_csv(features_csv, encoding='latin1')['Name'].tolist()
-    
-    # Load the dataset with the correct encoding
-    try:
-        raw_data = pd.read_csv(data_csv, header=None, encoding='ISO-8859-1', low_memory=False)
-    except UnicodeDecodeError:
-        # Try other common encodings if the first one fails
-        raw_data = pd.read_csv(data_csv, header=None, encoding='latin1', low_memory=False)
-    
-    # Assign feature names to the dataset columns
-    if len(raw_data.columns) == len(feature_names):
+        # Load feature names with ISO-8859-1
+        feature_names = pd.read_csv(
+            features_csv, 
+            encoding='ISO-8859-1',
+            on_bad_lines='warn'
+        )['Name'].tolist()
+
+        # Load main data with ISO-8859-1
+        raw_data = pd.read_csv(
+            data_csv,
+            header=None,
+            encoding='ISO-8859-1',
+            dtype=str,  # Read everything as string initially
+            low_memory=False,
+            on_bad_lines='warn'
+        )
+        
+        # Validate column count
+        if len(raw_data.columns) != len(feature_names):
+            raise ValueError(
+                f"Column mismatch. Expected {len(feature_names)}, got {len(raw_data.columns)}"
+            )
         raw_data.columns = feature_names
-    else:
-        raise ValueError("Number of columns in the dataset does not match the number of feature names.")
-    
-    # Replace invalid values (e.g., '-', 'NaN', 'inf', '-inf') with NaN
-    raw_data.replace(['-', 'NaN', 'inf', '-inf'], np.nan, inplace=True)
-    
-    # Convert all columns to numeric, coercing errors to NaN
-    for col in raw_data.columns:
-        raw_data[col] = pd.to_numeric(raw_data[col], errors='coerce')  # Use 'coerce' to convert non-numeric values to NaN
-    
-    # Replace infinite values with NaN
-    raw_data.replace([np.inf, -np.inf], np.nan, inplace=True)
-    
-    # Fill NaN values with 0 or the mean/median of the column
-    raw_data.fillna(0, inplace=True)  # Replace with 0 or use raw_data.fillna(raw_data.mean(), inplace=True)
-    
-    # Exclude non-numeric columns (e.g., IP addresses, labels) from features
-    non_numeric_columns = ['srcip', 'sport', 'dstip', 'dsport', 'attack_cat', 'Label']  # Use 'Label' instead of 'label'
-    features = raw_data.drop(columns=non_numeric_columns)
-    # Encode labels
-    label_encoder = LabelEncoder()
-    labels = label_encoder.fit_transform(raw_data['Label'])  # Use 'Label' instead of 'label'
-    
-    # Compute class weights
-    class_weights = compute_class_weight('balanced', classes=np.unique(labels), y=labels)
-    class_weights = torch.tensor(class_weights, dtype=torch.float)
-    
-    # Print class distribution
-    print("Class distribution in the dataset:", Counter(labels))
-    
-    return features, labels, raw_data, class_weights  # Return the raw data and class weights
 
+        # Convert numeric columns
+        numeric_cols = [col for col in raw_data.columns 
+                       if col not in ['srcip', 'sport', 'dstip', 'dsport', 'proto', 'attack_cat', 'Label']]
+        
+        for col in numeric_cols:
+            raw_data[col] = pd.to_numeric(raw_data[col], errors='coerce')
+        
+        # Clean remaining data
+        raw_data.replace([np.inf, -np.inf], np.nan, inplace=True)
+        raw_data.fillna(0, inplace=True)
 
+        # Process labels
+        label_encoder = LabelEncoder()
+        labels = label_encoder.fit_transform(raw_data['Label'])
+        
+        # Compute class weights
+        class_weights = torch.tensor(
+            compute_class_weight('balanced', classes=np.unique(labels), y=labels),
+            dtype=torch.float
+        )
+
+        return raw_data[numeric_cols], labels, raw_data, class_weights
+
+    except Exception as e:
+        print(f"Data loading failed: {str(e)}")
+        raise
 
 def construct_graph(features, labels, raw_data):
-    import networkx as nx
+    """Build graph with ISO-8859-1 compatible IP handling"""
     G = nx.Graph()
-    
-    # Create a mapping from IP addresses to node indices
     ip_to_node = {}
-    node_counter = 0
     
-    # Add nodes and edges based on communication
-    for i, row in raw_data.iterrows():
-        src_ip = row['srcip']  # Source IP
-        dst_ip = row['dstip']  # Destination IP
-        
-        # Add source IP as a node if not already added
-        if src_ip not in ip_to_node:
-            ip_to_node[src_ip] = node_counter
-            # Use .iloc to access the node_counter-th row of features
-            G.add_node(node_counter, features=features.iloc[node_counter].values, label=labels[node_counter])
-            node_counter += 1
-        
-        # Add destination IP as a node if not already added
-        if dst_ip not in ip_to_node:
-            ip_to_node[dst_ip] = node_counter
-            # Use .iloc to access the node_counter-th row of features
-            G.add_node(node_counter, features=features.iloc[node_counter].values, label=labels[node_counter])
-            node_counter += 1
-        
-        # Add an edge between source and destination IPs
-        src_node = ip_to_node[src_ip]
-        dst_node = ip_to_node[dst_ip]
-        G.add_edge(src_node, dst_node)
+    # Ensure we're working with strings
+    raw_data['srcip'] = raw_data['srcip'].astype(str)
+    raw_data['dstip'] = raw_data['dstip'].astype(str)
     
+    for idx, row in raw_data.iterrows():
+        try:
+            src_ip = row['srcip']
+            dst_ip = row['dstip']
+            
+            # Add nodes
+            for ip in [src_ip, dst_ip]:
+                if ip not in ip_to_node:
+                    node_id = len(ip_to_node)
+                    ip_to_node[ip] = node_id
+                    G.add_node(node_id, 
+                              features=features.iloc[idx].values,
+                              label=labels[idx])
+            
+            # Add edge
+            G.add_edge(ip_to_node[src_ip], ip_to_node[dst_ip])
+            
+        except Exception as e:
+            warnings.warn(f"Skipping row {idx}: {str(e)}")
+            continue
+    
+    print(f"Graph constructed with {len(G.nodes)} nodes and {len(G.edges)} edges")
     return G
 
-
-
-
-def convert_to_pyg_format(graph, features, labels):
-    import torch
-    from torch_geometric.data import Data
-
-    # Convert features to a tensor
-    if hasattr(features, 'values'):  # Check if features is a pandas DataFrame
-        x = torch.tensor(features.values, dtype=torch.float)
-    else:  # Assume features is already a numpy array or compatible
-        x = torch.tensor(features, dtype=torch.float)
-
-    # Convert labels to a tensor
-    if hasattr(labels, 'values'):  # Check if labels is a pandas Series/DataFrame
-        y = torch.tensor(labels.values, dtype=torch.long)
-    else:  # Assume labels is already a numpy array or compatible
-        y = torch.tensor(labels, dtype=torch.long)
-
-    # Extract edge indices from the graph
-    edge_index = torch.tensor(list(graph.edges), dtype=torch.long).t().contiguous()
-
-    # Create a PyG Data object
-    data = Data(x=x, edge_index=edge_index, y=y)
-    return data
+def convert_to_pyg_format(graph, device='cpu'):
+    """Convert with ISO-8859-1 compatible features"""
+    try:
+        x = torch.tensor(
+            np.array([graph.nodes[n]['features'] for n in graph.nodes]),
+            dtype=torch.float32
+        ).to(device)
+        
+        y = torch.tensor(
+            [graph.nodes[n]['label'] for n in graph.nodes],
+            dtype=torch.long
+        ).to(device)
+        
+        edge_index = torch.tensor(
+            list(graph.edges),
+            dtype=torch.long
+        ).t().contiguous().to(device)
+        
+        return Data(x=x, edge_index=edge_index, y=y)
+    except Exception as e:
+        print(f"PyG conversion failed: {str(e)}")
+        raise
