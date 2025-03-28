@@ -2,22 +2,36 @@ import sys
 from train import train
 from reality_checks import ModelValidator
 
+def print_report(results):
+    print("\n=== Final Results ===")
+    print(f"Behavioral Leakage Score: {results['behavioral_leakage']['leakage_score']:.2%}")
+    print(f"Test Accuracy: {results['performance']['accuracy']:.4f}")
+    
+    # Properly format classification report
+    print("\nDetailed Classification Report:")
+    report = results['performance']['report']
+    for key, value in report.items():
+        if isinstance(value, dict):
+            print(f"{key}:")
+            for metric, score in value.items():
+                print(f"  {metric}: {score:.4f}")
+        else:
+            print(f"{key}: {value:.4f}")
+
 def main():
     try:
         print("=============== Starting Training ================")
-        model, data, raw_data, ip_mapping = train()
+        model, data, raw_data, node_mapping = train()
         
         print("\n=============== Running Validation ===============")
-        validator = ModelValidator(model, raw_data, data, ip_mapping)
+        validator = ModelValidator(model, raw_data, data, node_mapping)
         
         results = {
-            'ip_leakage': validator.check_ip_leakage(),
+            'behavioral_leakage': validator.check_behavioral_leakage(),
             'performance': validator.evaluate_performance()
         }
         
-        print("\n=== Validation Results ===")
-        print(f"IP Leakage Score: {results['ip_leakage']['leakage_score']:.2%}")
-        print(f"Test Accuracy: {results['performance']['test_accuracy']:.4f}")
+        print_report(results)
         
     except Exception as e:
         print(f"\nPipeline failed: {str(e)}", file=sys.stderr)
