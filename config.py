@@ -4,7 +4,7 @@ class Config:
     FEATURES_CSV = "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/NUSW-NB15_features.csv"
 
     # Data Processing
-    SAMPLE_SIZE = 10000  # Reduced from 30000
+    SAMPLE_SIZE = 40000  # Reduced from 30000
     MAX_FEATURES = 20  # Reduced from 50
     RANDOM_STATE = 42
 
@@ -23,14 +23,14 @@ class Config:
     HEADS = 2
     GAT_LAYERS = 1
     WEIGHT_DECAY = 5e-4
-    MIN_DELTA = 0.005
+    MIN_DELTA = 0.001
 
     # Training
     EPOCHS = 30
     LEARNING_RATE = 0.001
     TEST_RATIO = 0.2
-    VAL_RATIO = 0.1
-    PATIENCE = 10
+    VAL_RATIO = 0.2
+    PATIENCE = 30
     CLASS_WEIGHTS = [1.0, 10.0]  # Moderate class weighting
 
     # Label Configuration (NEW)
