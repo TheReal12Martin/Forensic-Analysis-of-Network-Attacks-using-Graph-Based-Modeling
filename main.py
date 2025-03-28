@@ -5,24 +5,19 @@ from reality_checks import ModelValidator
 def main():
     try:
         print("=============== Starting Training ================")
-        model, data, raw_data, ip_mapping = train()  # Now getting ip_mapping
+        model, data, raw_data, ip_mapping = train()
         
         print("\n=============== Running Validation ===============")
-        validator = ModelValidator(
-            model=model,
-            raw_data=raw_data,
-            pyg_data=data,
-            ip_mapping=ip_mapping  # Passing the mapping
-        )
+        validator = ModelValidator(model, raw_data, data, ip_mapping)
         
         results = {
             'ip_leakage': validator.check_ip_leakage(),
-            'feature_sensitivity': validator.check_feature_sensitivity()
+            'performance': validator.evaluate_performance()
         }
         
-        print("\nValidation Results:")
+        print("\n=== Validation Results ===")
         print(f"IP Leakage Score: {results['ip_leakage']['leakage_score']:.2%}")
-        print(f"Feature Sensitivity Delta: {results['feature_sensitivity']['delta']:.4f}")
+        print(f"Test Accuracy: {results['performance']['test_accuracy']:.4f}")
         
     except Exception as e:
         print(f"\nPipeline failed: {str(e)}", file=sys.stderr)

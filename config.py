@@ -4,17 +4,17 @@ class Config:
     FEATURES_CSV = "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/NUSW-NB15_features.csv"
 
     #Model Hyperparameters
-    HIDDEN_CHANNELS = 16
-    HEADS = 8
-    NUM_CLASSES = 2
-    LEARNING_RATE = 0.01
-    WEIGHT_DECAY = 5e-4
-    EPOCHS = 200
-
-    #Training Settings
-    TRAIN_RATIO = 0.7
+    TRAIN_RATIO = 0.65
+    TEST_RATIO = 0.2
     VAL_RATIO = 0.15
-    TEST_RATIO = 0.15
+    RANDOM_STATE = 42
+    EPOCHS = 200
+    HIDDEN_CHANNELS = 128
+    HEADS = 4
+    LEARNING_RATE = 0.001
+    NUM_CLASSES = 2
+    DROPOUT = 0.5
+    WEIGHT_DECAY = 1e-4
 
     VALIDATION = {
         'min_leakage_score': 0.05,  # Fail if IP leakage >5%
