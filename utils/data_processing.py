@@ -1,89 +1,84 @@
 import pandas as pd
 import numpy as np
 import networkx as nx
-from sklearn.preprocessing import StandardScaler
-from sklearn.utils import compute_class_weight
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.decomposition import PCA
 from torch_geometric.data import Data
+from torch_geometric.utils import to_undirected
 import torch
-from collections import defaultdict
-import hashlib
 from config import Config
-import gc
+from collections import defaultdict
+import warnings
+warnings.filterwarnings("ignore")
 
 def loadAndProcessData(data_csv, features_csv):
     try:
-        print("\n=== Loading and Processing Data ===")
+        print("\n=== Loading Data ===")
         
         # Load feature definitions
         feature_defs = pd.read_csv(features_csv, encoding='ISO-8859-1')
-        if 'Name' not in feature_defs.columns:
-            feature_defs.columns = ['Name'] + feature_defs.columns[1:].tolist()
-
-        # Load data in chunks
-        chunks = []
-        for chunk in pd.read_csv(data_csv, header=None, chunksize=100000, low_memory=False):
-            if len(chunk.columns) == len(feature_defs):
-                chunk.columns = feature_defs['Name']
-            else:
-                chunk.columns = [f'col_{i}' for i in range(len(chunk.columns)-1)] + ['Label']
-            chunks.append(chunk)
-        raw_data = pd.concat(chunks, ignore_index=True)
-
-        # IP Anonymization
-        if Config.IP_ANONYMIZE:
-            print("Applying IP anonymization...")
-            for ip_col in ['srcip', 'dstip']:
-                if ip_col in raw_data.columns:
-                    raw_data[ip_col] = raw_data[ip_col].astype(str).apply(
-                        lambda x: hashlib.sha256(x.encode()).hexdigest()[:Config.IP_HASH_LENGTH]
-                    )
-
-        # Class Balancing
-        print("\n=== Class Distribution Before Balancing ===")
-        class_counts = raw_data['Label'].value_counts()
-        print(class_counts)
-
-        min_samples = min(Config.MIN_SAMPLES_PER_CLASS, class_counts.min())
-        balanced_data = pd.concat([
-            raw_data[raw_data['Label'] == cls].sample(min_samples, random_state=Config.RANDOM_STATE)
-            for cls in class_counts.index
-        ])
-
-        print("\n=== Class Distribution After Balancing ===")
-        print(balanced_data['Label'].value_counts())
-
-        # Feature Engineering
-        print("\n=== Feature Engineering ===")
-        features = balanced_data.drop(['Label', 'attack_cat'], axis=1, errors='ignore')
         
-        # Create robust features
-        with np.errstate(divide='ignore', invalid='ignore'):
-            features['flow_ratio'] = np.log1p(features['sbytes']) / np.log1p(features['dbytes'].replace(0, 1))
-            features['response_ratio'] = features['Dpkts'] / features['Spkts'].replace(0, 1)
-        features = features.fillna(0)
-
-        # Convert categoricals
-        for col in ['proto', 'state', 'service']:
-            if col in features.columns:
-                features[col] = pd.Categorical(features[col]).codes.astype('int8')
-
-        # Feature Normalization
-        print("\n=== Feature Normalization ===")
-        numeric_cols = features.select_dtypes(include=['number']).columns
-        features[numeric_cols] = StandardScaler().fit_transform(features[numeric_cols])
-        features[numeric_cols] = np.clip(features[numeric_cols], -5, 5)
-
-        # Class weights
-        class_weights = compute_class_weight(
-            'balanced',
-            classes=np.unique(balanced_data['Label']),
-            y=balanced_data['Label']
+        # Generate column names
+        column_names = []
+        name_counts = {}
+        for i in range(len(feature_defs)):
+            base_name = feature_defs.iloc[i]['Name']
+            if base_name in name_counts:
+                name_counts[base_name] += 1
+                column_names.append(f"{base_name}_dup{name_counts[base_name]}")
+            else:
+                name_counts[base_name] = 0
+                column_names.append(base_name)
+        
+        # Load data with generated headers
+        raw_data = pd.read_csv(
+            data_csv,
+            header=None,
+            names=column_names,
+            low_memory=False
         )
-        print("\n=== Class Weights ===")
-        print(f"Class 0: {class_weights[0]:.4f}, Class 1: {class_weights[1]:.4f}")
-
-        gc.collect()
-        return features, balanced_data['Label'].values, balanced_data, torch.tensor(class_weights, dtype=torch.float)
+        
+        # Process labels
+        if Config.LABEL_COLUMN not in raw_data.columns:
+            raise ValueError(f"Label column '{Config.LABEL_COLUMN}' not found")
+        
+        def map_label(label):
+            label_str = str(label).lower()
+            for pattern, value in Config.LABEL_MAPPING.items():
+                if pattern in label_str:
+                    return value
+            return 1  # Default to malicious
+        
+        raw_data['Label'] = raw_data[Config.LABEL_COLUMN].apply(map_label)
+        
+        # Sample data if needed
+        if len(raw_data) > Config.SAMPLE_SIZE:
+            raw_data = raw_data.sample(
+                Config.SAMPLE_SIZE, 
+                random_state=Config.RANDOM_STATE
+            ).reset_index(drop=True)
+        
+        # Process features
+        numeric_cols = [col for col in raw_data.columns 
+                       if col in Config.NUMERIC_FEATURES]
+        numeric_features = raw_data[numeric_cols].fillna(0)
+        
+        categorical_cols = [col for col in raw_data.columns 
+                          if col in Config.CATEGORICAL_FEATURES]
+        encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
+        categorical_features = encoder.fit_transform(raw_data[categorical_cols])
+        
+        # Combine features
+        features = np.concatenate([numeric_features.values, categorical_features], axis=1)
+        
+        # Dimensionality reduction
+        if features.shape[1] > Config.MAX_FEATURES:
+            features = PCA(n_components=Config.MAX_FEATURES).fit_transform(features)
+        
+        # Normalization
+        features = StandardScaler().fit_transform(features)
+        
+        return features, raw_data['Label'].values, raw_data
 
     except Exception as e:
         print(f"\nData loading failed: {str(e)}")
@@ -91,64 +86,67 @@ def loadAndProcessData(data_csv, features_csv):
 
 def construct_graph(features, labels, raw_data):
     try:
-        print("\n=== Constructing Graph ===")
+        print("\n=== Building Graph ===")
         G = nx.Graph()
-        node_mapping = {}
+        ip_mapping = {}
         
-        numerical_features = features.select_dtypes(include=['number'])
-        print(f"Using {len(numerical_features.columns)} numerical features")
-
-        valid_nodes = skipped_nodes = nan_nodes = 0
+        # Reset indices for alignment
+        raw_data = raw_data.reset_index(drop=True)
         
-        for idx, row in raw_data.reset_index(drop=True).iterrows():
-            try:
-                if idx >= len(numerical_features):
-                    skipped_nodes += 1
-                    continue
-                    
-                node_id = f"{row['proto']}_{row['service']}_{idx}"
-                node_features = numerical_features.iloc[idx].values.astype('float32')
-                
-                if np.isnan(node_features).any():
-                    node_features = np.nan_to_num(node_features)
-                    nan_nodes += 1
-                    
-                if node_id not in node_mapping:
-                    node_mapping[node_id] = len(node_mapping)
-                    G.add_node(
-                        node_mapping[node_id],
-                        features=node_features,
-                        label=labels[idx]
-                    )
-                    valid_nodes += 1
-                
-                target_id = f"dst_{row['dsport']}_{idx}"
-                if target_id not in node_mapping:
-                    node_mapping[target_id] = len(node_mapping)
-                    G.add_node(
-                        node_mapping[target_id],
-                        features=np.zeros(numerical_features.shape[1], dtype='float32'),
-                        label=0
-                    )
-                
-                src, dst = node_mapping[node_id], node_mapping[target_id]
-                if G.has_edge(src, dst):
-                    G[src][dst]['weight'] += 1
-                else:
-                    G.add_edge(src, dst, weight=1)
-                    
-            except Exception:
-                skipped_nodes += 1
-                continue
-
-        print(f"\n=== Graph Construction Report ===")
-        print(f"Valid nodes: {valid_nodes}")
-        print(f"Nodes with NaN fixes: {nan_nodes}")
-        print(f"Skipped rows: {skipped_nodes}")
-        print(f"Total nodes: {len(G.nodes)}")
-        print(f"Total edges: {len(G.edges)}")
+        # First pass: Create nodes and track flows per IP
+        ip_flows = defaultdict(list)
+        for idx, row in raw_data.iterrows():
+            src_ip = row['srcip']
+            dst_ip = row['dstip']
+            ip_flows[src_ip].append(idx)
+            ip_flows[dst_ip].append(idx)
         
-        return G, node_mapping
+        # Create nodes with aggregated features
+        all_ips = list(ip_flows.keys())
+        for ip in all_ips:
+            ip_mapping[ip] = len(ip_mapping)
+            flow_indices = ip_flows[ip]
+            
+            # Aggregate features from all flows
+            avg_features = np.mean(features[flow_indices], axis=0)
+            # Label as malicious if any flow is malicious
+            ip_label = max(labels[flow_indices])
+            
+            G.add_node(
+                ip_mapping[ip],
+                features=avg_features,
+                label=ip_label,
+                ip=ip,
+                flow_count=len(flow_indices)
+            )
+        
+        # Second pass: Create edges
+        edge_weights = defaultdict(int)
+        for _, row in raw_data.iterrows():
+            src_idx = ip_mapping[row['srcip']]
+            dst_idx = ip_mapping[row['dstip']]
+            edge_key = tuple(sorted((src_idx, dst_idx)))
+            edge_weights[edge_key] += 1
+        
+        for (u, v), weight in edge_weights.items():
+            G.add_edge(u, v, weight=weight)
+        
+        # Filter edges
+        if Config.MIN_EDGE_WEIGHT > 0:
+            edges_to_remove = [
+                (u, v) for u, v, d in G.edges(data=True) 
+                if d['weight'] < Config.MIN_EDGE_WEIGHT
+            ]
+            G.remove_edges_from(edges_to_remove)
+            print(f"Removed {len(edges_to_remove)} weak edges")
+        
+        print("\n=== Graph Statistics ===")
+        print(f"Nodes: {len(G.nodes)}")
+        print(f"Edges: {len(G.edges)}")
+        print("Class distribution:")
+        print(pd.Series([G.nodes[n]['label'] for n in G.nodes]).value_counts())
+        
+        return G, ip_mapping
 
     except Exception as e:
         print(f"\nGraph construction failed: {str(e)}")
@@ -156,23 +154,32 @@ def construct_graph(features, labels, raw_data):
 
 def convert_to_pyg_format(graph, device='cpu'):
     try:
-        print("\n=== Converting to PyG Format ===")
-        features = np.array([graph.nodes[n]['features'] for n in graph.nodes], dtype='float32')
-        y = torch.tensor([graph.nodes[n]['label'] for n in graph.nodes], dtype=torch.long)
+        print("\n=== Converting to PyG ===")
+        # Get nodes in consistent order
+        nodes = sorted(graph.nodes())
+        features = np.array([graph.nodes[n]['features'] for n in nodes])
+        y = torch.tensor([graph.nodes[n]['label'] for n in nodes], dtype=torch.long)
         
+        # Convert edges
         edges = list(graph.edges(data='weight', default=1.0))
         edge_index = torch.tensor([(u, v) for u, v, _ in edges], dtype=torch.long).t().contiguous()
         edge_attr = torch.tensor([w for _, _, w in edges], dtype=torch.float).view(-1, 1)
         
+        # Make undirected
+        edge_index, edge_attr = to_undirected(edge_index, edge_attr)
+        
+        print("\n=== PyG Data Summary ===")
         print(f"Node features shape: {features.shape}")
         print(f"Edge index shape: {edge_index.shape}")
+        print(f"Edge weights shape: {edge_attr.shape}")
+        print(f"Classes present: {torch.unique(y).tolist()}")
         
         return Data(
-            x=torch.from_numpy(features).to(device),
+            x=torch.FloatTensor(features).to(device),
             edge_index=edge_index.to(device),
             edge_attr=edge_attr.to(device),
             y=y.to(device),
-            num_nodes=len(graph.nodes)
+            num_nodes=len(nodes)
         )
     except Exception as e:
         print(f"\nPyG conversion failed: {str(e)}")
