@@ -1,58 +1,76 @@
 class Config:
     # Data Paths
-    CSV_FILE = "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/train_UNSW_NB15.csv"
-    FEATURES_CSV = "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/NUSW-NB15_features.csv"
+    CSV_FILE = "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/Thuesday-20-02-2018_TrafficForML_CICFlowMeter.csv"
+    FEATURES_CSV = None  # Not needed since we'll hardcode features
+    
+    # Label Configuration
+    LABEL_COLUMN = 'Label'
+    LABEL_MAPPING = {
+        'Benign': 0,
+        'DDoS': 1,
+        'DDoS attacks-LOIC-HTTP': 1,
+        'DDOS': 1
+    }
+    
+    # CIC-IDS2018 Specific Features
+    NUMERIC_FEATURES = [
+        'Flow Duration', 
+        'Tot Fwd Pkts',
+        'Tot Bwd Pkts',
+        'TotLen Fwd Pkts',
+        'TotLen Bwd Pkts',
+        'Flow Byts/s',
+        'Flow Pkts/s',
+        'Fwd Pkt Len Max',
+        'Bwd Pkt Len Max',
+        'Pkt Len Mean',
+        'FIN Flag Cnt'
+    ]
+    
+    CATEGORICAL_FEATURES = ['Protocol']
+    
+    # Label configuration
+    LABEL_COLUMN = 'Label'
 
-    # Data Processing
-    SAMPLE_SIZE = 40000  # Reduced from 30000
-    MAX_FEATURES = 20  # Reduced from 50
-    RANDOM_STATE = 42
+    # IP column names
+    SRC_IP_COL = 'Src IP'
+    DST_IP_COL = 'Dst IP'
 
-    # Core Features Only
-    NUMERIC_FEATURES = ['dur', 'sbytes', 'dbytes', 'sttl', 'dttl', 'Sload', 'Dload']
-    CATEGORICAL_FEATURES = ['proto', 'service']
+    CLASS_NAMES = ['Benign', 'Malicious']
 
-    # Graph Parameters
+    # Add these to your existing config
+    MAX_FEATURE_VALUE = 1e12  # For capping extreme values
+    INF_REPLACEMENT = 1e12    # For replacing infinity
+    
+    # Graph Construction
     MIN_EDGE_WEIGHT = 1
-    MAX_NODE_DEGREE = 50  # Reduced from 1000
-
-    # Simplified Model
-    HIDDEN_CHANNELS = 64
+    MAX_NODE_DEGREE = 1000
+    
+    # Model Architecture
+    HIDDEN_CHANNELS = 128
     NUM_CLASSES = 2
-    DROPOUT = 0.5
-    HEADS = 2
-    GAT_LAYERS = 1
-    WEIGHT_DECAY = 5e-4
-    MIN_DELTA = 0.001
-
+    DROPOUT = 0.3
+    HEADS = 8
+    GAT_LAYERS = 2
+    
     # Training
-    EPOCHS = 30
-    LEARNING_RATE = 0.001
     TEST_RATIO = 0.2
     VAL_RATIO = 0.2
-    PATIENCE = 30
-    CLASS_WEIGHTS = [1.0, 10.0]  # Moderate class weighting
-
-    # Label Configuration (NEW)
-    LABEL_COLUMN = 'Label'  # Column name containing labels in your data
-    LABEL_MAPPING = {       # How to interpret different label values
-        'benign': 0,
-        'normal': 0,
-        '0': 0,
-        'malicious': 1,
-        'attack': 1,
-        '1': 1
-    }
-
-    BALANCE_CLASSES = True  # Set to False to disable class balancing
-    MAX_SAMPLES_PER_CLASS = 30000  # Maximum samples per class
-    MIN_SAMPLES_PER_CLASS = 10000  # Minimum samples per class (for minority class)
-    MAX_FEATURES = 50
+    EPOCHS = 100
+    LEARNING_RATE = 0.001
+    WEIGHT_DECAY = 5e-4
+    MIN_DELTA = 0.001
+    PATIENCE = 15
+    CLASS_WEIGHTS = [10.0, 1.0]  # Higher weight for DDoS
     RANDOM_STATE = 42
 
-    # Feature Configuration
-    NUMERIC_FEATURES = ['dur', 'sbytes', 'dbytes', 'sttl', 'dttl', 'sloss', 'dloss', 
-                       'Sload', 'Dload', 'Spkts', 'Dpkts', 'swin', 'dwin', 'stcpb', 'dtcpb',
-                       'smeansz', 'dmeansz', 'trans_depth', 'res_bdy_len', 'Sjit', 'Djit',
-                       'Stime', 'Ltime', 'Sintpkt', 'Dintpkt', 'tcprtt', 'synack', 'ackdat']
-    CATEGORICAL_FEATURES = ['proto', 'service', 'state']
+    # Memory optimization
+    CHUNK_SIZE = 50000  # Rows per chunk
+    # Memory Limits
+    MAX_RAM_GB = 12  # Set to 80% of your available RAM
+    NODE_CHUNK_SIZE = 5000  # Reduce if still crashing
+    EDGE_CHUNK_SIZE = 100000
+    
+    # Downsampling (if needed)
+    MAX_SAMPLES = 2000000  # Limit total samples
+    DOWNSAMPLE_RATIO = 0.5  # Random sampling ratio
