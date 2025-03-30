@@ -1,108 +1,71 @@
 import networkx as nx
 import numpy as np
 from collections import defaultdict
-from config import Config
-import gc
 from tqdm import tqdm
-import sys
+from config import Config
+import networkx as nx
+import numpy as np
+from tqdm import tqdm
 
 def build_graph_from_partition(partition_file):
-    """Optimized graph construction with proper memory tracking"""
     try:
-        print("Loading partition data...")
+        print("Loading data with rigorous index control...")
         data = np.load(partition_file, allow_pickle=True)
         
-        # Validate critical data
-        required_arrays = ['features', 'labels', 'src_ips', 'dst_ips']
-        for arr in required_arrays:
-            if arr not in data:
-                raise ValueError(f"Missing required array: {arr}")
-
-        # Convert to memory-efficient formats
-        src_ips = data['src_ips'].astype('U15')  # Fixed-width strings
+        src_ips = data['src_ips'].astype('U15')
         dst_ips = data['dst_ips'].astype('U15')
         features = data['features'].astype(np.float32)
         labels = data['labels'].astype(np.int8)
 
-        print("Constructing graph (optimized version)...")
+        print("Creating deterministic IP mapping...")
+        unique_ips = np.unique(np.concatenate([src_ips, dst_ips]))
+        ip_to_idx = {ip: idx for idx, ip in enumerate(sorted(unique_ips))}
+        
+        print(f"Total unique IPs: {len(ip_to_idx)}")
+        
+        # Initialize graph with explicit node creation and feature initialization
         G = nx.Graph()
-        ip_mapping = {}
-        edge_counts = defaultdict(int)
+        feature_shape = features.shape[1]
         
-        # Track feature memory usage
-        feature_mem = 0
+        # Initialize ALL nodes with zero features first
+        for ip, idx in ip_to_idx.items():
+            G.add_node(idx, 
+                      features=np.zeros(feature_shape, dtype=np.float32),
+                      label=0)
         
-        # Process unique IPs
-        print("Identifying unique IPs...")
-        all_ips = np.unique(np.concatenate([src_ips, dst_ips]))
+        print("Processing edges with index validation...")
+        # Track which nodes actually have features
+        nodes_with_features = set()
         
-        # Create nodes with initial features
-        print("Creating nodes...")
-        for ip in tqdm(all_ips, desc="Nodes"):
-            ip_mapping[ip] = len(ip_mapping)
-            G.add_node(ip_mapping[ip], features=None, label=0)
-        
-        # Process connections in chunks
-        chunk_size = 50000
-        num_chunks = int(np.ceil(len(src_ips) / chunk_size))
-        
-        print("Processing connections...")
-        for chunk_idx in tqdm(range(num_chunks), desc="Connections"):
-            start = chunk_idx * chunk_size
-            end = min((chunk_idx + 1) * chunk_size, len(src_ips))
+        for i in tqdm(range(len(src_ips)), desc="Edge processing"):
+            src_idx = ip_to_idx[src_ips[i]]
+            dst_idx = ip_to_idx[dst_ips[i]]
             
-            chunk_src = src_ips[start:end]
-            chunk_dst = dst_ips[start:end]
-            chunk_feat = features[start:end]
-            chunk_labels = labels[start:end]
+            # Validate indices exist in graph
+            if not G.has_node(src_idx) or not G.has_node(dst_idx):
+                raise ValueError(f"Missing node(s) for edge {src_idx}-{dst_idx}")
             
-            for i in range(len(chunk_src)):
-                src_idx = ip_mapping[chunk_src[i]]
-                dst_idx = ip_mapping[chunk_dst[i]]
-                
-                # Update node features
-                if G.nodes[src_idx]['features'] is None:
-                    G.nodes[src_idx]['features'] = chunk_feat[i]
-                    feature_mem += chunk_feat[i].nbytes
-                else:
-                    G.nodes[src_idx]['features'] = (
-                        G.nodes[src_idx]['features'] + chunk_feat[i]
-                    ) / 2
-                
-                # Update label
-                G.nodes[src_idx]['label'] = max(
-                    G.nodes[src_idx]['label'], 
-                    chunk_labels[i]
-                )
-                
-                # Track edges
-                edge_key = tuple(sorted((src_idx, dst_idx)))
-                edge_counts[edge_key] += 1
+            # Update node features (average with existing)
+            G.nodes[src_idx]['features'] = (G.nodes[src_idx]['features'] * len(nodes_with_features) + features[i]) / (len(nodes_with_features) + 1)
+            nodes_with_features.add(src_idx)
             
-            # Clear memory every 10 chunks
-            if chunk_idx % 10 == 0:
-                gc.collect()
+            G.nodes[src_idx]['label'] = max(G.nodes[src_idx]['label'], labels[i])
+            
+            # Add edge
+            if G.has_edge(src_idx, dst_idx):
+                G.edges[src_idx, dst_idx]['weight'] += 1
+            else:
+                G.add_edge(src_idx, dst_idx, weight=1)
+
+        # Final sanity checks
+        print("\nGraph validation report:")
+        print(f"Total nodes: {len(G.nodes)}")
+        print(f"Node index range: {min(G.nodes)} to {max(G.nodes)}")
+        print(f"Total edges: {len(G.edges)}")
+        print(f"Nodes with features: {len(nodes_with_features)}")
         
-        # Add edges with weights
-        print("Creating edges...")
-        for (u, v), weight in tqdm(edge_counts.items(), desc="Edges"):
-            G.add_edge(u, v, weight=weight)
-        
-        # Final validation
-        print("Finalizing graph...")
-        for n in G.nodes():
-            if G.nodes[n]['features'] is None:
-                G.nodes[n]['features'] = np.zeros(features.shape[1], dtype=np.float32)
-                feature_mem += G.nodes[n]['features'].nbytes
-        
-        print("\n=== Optimized Graph Stats ===")
-        print(f"Nodes: {len(G.nodes):,}")
-        print(f"Edges: {len(G.edges):,}")
-        print(f"Feature memory: {feature_mem/(1024**2):.2f} MB")
-        print(f"Graph memory: {sys.getsizeof(G)/(1024**2):.2f} MB (estimated)")
-        
-        return G, ip_mapping
-        
+        return G, ip_to_idx
+
     except Exception as e:
-        print(f"\nGraph construction failed: {str(e)}")
+        print(f"Graph construction failed: {str(e)}")
         raise

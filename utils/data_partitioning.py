@@ -5,6 +5,25 @@ import os
 from config import Config
 import gc
 
+def balance_data(chunk):
+    """Balance the class distribution in the data chunk"""
+    benign_mask = chunk[Config.LABEL_COLUMN].str.strip().str.upper() == 'BENIGN'
+    benign_samples = chunk[benign_mask]
+    malicious_samples = chunk[~benign_mask]
+    
+    n_benign = len(benign_samples)
+    n_malicious_target = int(n_benign / Config.BALANCE_RATIO)
+    
+    # If we don't have enough malicious samples, take all we have
+    n_malicious = min(len(malicious_samples), n_malicious_target)
+    
+    balanced_chunk = pd.concat([
+        benign_samples,
+        malicious_samples.sample(n_malicious, random_state=Config.RANDOM_STATE)
+    ])
+    
+    return balanced_chunk.sample(frac=1, random_state=Config.RANDOM_STATE)  # Shuffle
+
 def partition_and_process(input_csv, partitions=4, output_dir="data_partitions"):
     """Split large CSV into processed partitions with validation"""
     try:
@@ -30,24 +49,25 @@ def partition_and_process(input_csv, partitions=4, output_dir="data_partitions")
         rows_per_part = total_rows // partitions
         partition_files = []
         
-        # Read and process chunks
         for i in range(partitions):
             part_file = os.path.join(output_dir, f"partition_{i}.npz")
             print(f"Creating partition {i+1}/{partitions}")
             
-            # Read chunk with column verification
             try:
                 chunk = pd.read_csv(
                     input_csv,
                     skiprows=i * rows_per_part + 1,
                     nrows=rows_per_part,
-                    names=pd.read_csv(input_csv, nrows=0).columns,  # preserve header
+                    names=pd.read_csv(input_csv, nrows=0).columns,
                     dtype={
                         **{col: np.float32 for col in Config.NUMERIC_FEATURES},
                         **{col: 'category' for col in Config.CATEGORICAL_FEATURES},
                         Config.LABEL_COLUMN: 'string'
                     }
                 )
+                
+                # Balance the data before processing
+                chunk = balance_data(chunk)
             except pd.errors.EmptyDataError:
                 raise ValueError(f"Partition {i} is empty - check your partitioning")
 
