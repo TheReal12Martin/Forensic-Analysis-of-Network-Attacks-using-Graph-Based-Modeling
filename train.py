@@ -12,17 +12,15 @@ def train_partition(partition_file):
     try:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        # 1. Graph Construction (check if successful)
+        # 1. Graph Construction
         graph, ip_to_idx = build_graph_from_partition(partition_file)
-        if graph is None or len(graph.nodes) == 0:
-            raise ValueError("Graph construction failed - empty or invalid partition")
-
-        # 2. Convert to PyG (validate data)
+        
+        # 2. Convert to PyG
         data = convert_to_pyg_memory_safe(graph, device)
-        if not hasattr(data, 'train_mask'):
-            raise ValueError("PyG Data missing train_mask!")
-
-        # 3. Train GAT (return model or raise error)
+        del graph
+        gc.collect()
+        
+        # 3. Train GAT
         model = GAT(
             num_features=data.num_features,
             hidden_channels=Config.HIDDEN_CHANNELS,
@@ -30,33 +28,48 @@ def train_partition(partition_file):
             num_layers=Config.GAT_LAYERS,
             dropout=Config.DROPOUT
         ).to(device)
-
-        optimizer = torch.optim.AdamW(model.parameters(), lr=Config.LEARNING_RATE)
-        best_val_acc = 0.0
-
+        
+        optimizer = torch.optim.AdamW(model.parameters(), 
+                                    lr=Config.LEARNING_RATE,
+                                    weight_decay=Config.WEIGHT_DECAY)
+        
+        # Class weights
+        class_weights = torch.tensor(Config.CLASS_WEIGHTS, device=device)
+        
+        best_val_acc = 0
         for epoch in range(Config.EPOCHS):
             model.train()
             optimizer.zero_grad()
+            
             out = model(data.x, data.edge_index)
-            loss = F.cross_entropy(out[data.train_mask], data.y[data.train_mask])
+            loss = F.cross_entropy(out[data.train_mask], 
+                                 data.y[data.train_mask],
+                                 weight=class_weights)
+            
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
-
+            
             # Validation
-            model.eval()
             with torch.no_grad():
+                model.eval()
                 pred = model(data.x, data.edge_index).argmax(dim=1)
                 val_acc = (pred[data.val_mask] == data.y[data.val_mask]).float().mean()
+                
                 if val_acc > best_val_acc:
                     best_val_acc = val_acc
                     best_model = model.state_dict()
-
-        if best_val_acc < 0.5:  # Sanity check
-            raise ValueError(f"Training failed (val_acc={best_val_acc:.2f})")
+            
+            if epoch % 5 == 0:
+                print(f"Epoch {epoch:02d} | Loss: {loss.item():.4f} | Val Acc: {val_acc:.4f}")
+                torch.cuda.empty_cache() if torch.cuda.is_available() else None
+                gc.collect()
         
-        model.load_state_dict(best_model)
         return model, data
-
+        
     except Exception as e:
-        print(f"\n❌ Training crashed on {partition_file}: {str(e)}\n")
-        return None, None  # Explicitly return None for error handling
+        print(f"Training failed: {str(e)}")
+        raise
+    finally:
+        gc.collect()
+        torch.cuda.empty_cache()

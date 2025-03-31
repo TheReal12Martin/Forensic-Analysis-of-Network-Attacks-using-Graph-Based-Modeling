@@ -50,9 +50,10 @@ class Config:
     CATEGORICAL_FEATURES = ['protocol']
     
     # Rest of your configuration remains the same...
-    MAX_SAMPLES = 8_000_000  # Limit total samples
-    MAX_PARTITION_SIZE_GB = 2.0
-    CHUNK_SIZE = 100_000  # Rows per chun
+    MAX_PARTITION_SIZE_GB = 1.0  # Process up to 1GB at a time
+    MAX_SAMPLES = 5_000_000  # Limit total samples
+    MAX_PARTITION_SIZE_GB = 1.0
+    CHUNK_SIZE = 50_000  # Rows per chun
 
     MAX_GRAPH_NODES = 50000  # Maximum nodes per graph
     MAX_GRAPH_EDGES = 200000  # Maximum edges per graph
@@ -90,7 +91,7 @@ class Config:
     PATIENCE = 20
     CLASS_WEIGHTS = [1.0, 10.0]  # Higher weight for attacks
     RANDOM_STATE = 42
-    BALANCE_RATIO = 0.5  # Target ratio of benign:malicious samples
+    BALANCE_RATIO = 0.3  # Target ratio of benign:malicious samples
     
     # Feature processing
     MAX_FEATURE_VALUE = 1e12

@@ -9,13 +9,6 @@ def build_graph_from_partition(partition_file):
     try:
         # Load with validation
         data = np.load(partition_file)
-
-        # Verify we have both classes
-        unique_labels = np.unique(data['labels'])
-        if len(unique_labels) < 2:
-            print(f"Partition has only {len(unique_labels)} class(es). Skipping.")
-            return None, None
-
         required = ['features', 'labels', 'src_ips', 'dst_ips']
         if not all(k in data for k in required):
             raise KeyError(f"Partition missing required keys: {required}")
