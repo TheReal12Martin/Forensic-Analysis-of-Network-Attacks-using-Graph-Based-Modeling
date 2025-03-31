@@ -1,51 +1,74 @@
 class Config:
-    # Data Paths
-    CSV_FILE = "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/Thuesday-20-02-2018_TrafficForML_CICFlowMeter.csv"
-    FEATURES_CSV = None  # Not needed since we'll hardcode features
+    # Updated Data Configuration
+    DATA_FOLDER = "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/BCCC-CIC2018"
+    BENIGN_PATTERN = "*benign*.csv"  # Pattern to match benign files
+    MALICIOUS_PATTERNS = ["*bot*.csv",
+                         "*dos*.csv",
+                         "*BF*.csv",
+                         "*SQL*.csv",
+                         "*infiltration*.csv",
+                         "*DoS*.csv",
+                         "*loic*.csv",
+                         "*hoic*.csv"]
     
     # Label Configuration
-    LABEL_COLUMN = 'Label'
     LABEL_MAPPING = {
-        'Benign': 0,
+        'benign': 0,
+        'BENIGN': 0,
+        'Bot': 1,
         'DDoS': 1,
-        'DDoS attacks-LOIC-HTTP': 1,
-        'DDOS': 1
+        'Brute_Force_Web': 1,
+        'Infiltration': 1,
+        'DoS_HULK': 1,
+        'DoS_SlowHTTP': 1,
+        'Brute_Force_XSS': 1,
+        'SQL_Injection': 1,
+        'DoS_Golden_Eye': 1,
+        'DoS_Slowloris': 1,
+        'DDoS_Loic_HTTP': 1,
+        'Brute_Force_FTP': 1,
+        'Brute_Force_SSH': 1,
+        'DDoS_HOIC': 1
     }
     
-    # CIC-IDS2018 Specific Features
+    # Feature Configuration (adjust based on your dataset)
     NUMERIC_FEATURES = [
-        'Flow Duration', 
-        'Tot Fwd Pkts',
-        'Tot Bwd Pkts',
-        'TotLen Fwd Pkts',
-        'TotLen Bwd Pkts',
-        'Flow Byts/s',
-        'Flow Pkts/s',
-        'Fwd Pkt Len Max',
-        'Bwd Pkt Len Max',
-        'Pkt Len Mean',
-        'FIN Flag Cnt'  # 11 numeric features
+        'duration',
+        'packets_count',
+        'total_payload_bytes',
+        'payload_bytes_mean',
+        'payload_bytes_std',
+        'fwd_packets_count',
+        'bwd_packets_count',
+        'fwd_total_payload_bytes',
+        'bwd_total_payload_bytes',
+        'bytes_rate',
+        'packets_rate',
+        'fwd_packets_rate'
     ]
     
-    CATEGORICAL_FEATURES = ['Protocol']  # 1 categorical feature
+    CATEGORICAL_FEATURES = ['protocol']
     
-    # Calculated feature dimensions (11 numeric + one-hot encoded Protocol)
-    # Update PROTOCOL_DIM based on your actual Protocol categories (4 in your case)
-    PROTOCOL_DIM = 4  # Number of unique Protocol values in your data
-    INPUT_FEATURES = len(NUMERIC_FEATURES) + PROTOCOL_DIM  # 11 + 4 = 15
+    # Rest of your configuration remains the same...
+    MAX_PARTITION_SIZE_GB = 1.0  # Process up to 1GB at a time
+    MAX_SAMPLES = 5_000_000  # Limit total samples
+    MAX_PARTITION_SIZE_GB = 1.0
+    CHUNK_SIZE = 50_000  # Rows per chun
+
+    MAX_GRAPH_NODES = 50000  # Maximum nodes per graph
+    MAX_GRAPH_EDGES = 200000  # Maximum edges per graph
     
-    # Label configuration
-    LABEL_COLUMN = 'Label'
+    CLASS_NAMES = {'Benign': 0, 'Malicious': 1}
 
-    # IP column names
-    SRC_IP_COL = 'Src IP'
-    DST_IP_COL = 'Dst IP'
-
-    CLASS_NAMES = ['Benign', 'Malicious']
-
-    # Add these to your existing config
-    MAX_FEATURE_VALUE = 1e12  # For capping extreme values
-    INF_REPLACEMENT = 1e12    # For replacing infinity
+    CATEGORICAL_FEATURES = ['protocol']
+    
+    # IP columns
+    SRC_IP_COL = 'src_ip'
+    DST_IP_COL = 'dst_ip'
+    
+    # Calculated dimensions
+    PROTOCOL_DIM = 3  # TCP, UDP, ICMP
+    INPUT_FEATURES = len(NUMERIC_FEATURES) + PROTOCOL_DIM
     
     # Graph Construction
     MIN_EDGE_WEIGHT = 1
@@ -66,27 +89,17 @@ class Config:
     WEIGHT_DECAY = 1e-4
     MIN_DELTA = 0.005
     PATIENCE = 20
-    CLASS_WEIGHTS = [10.0, 1.0]  # Higher weight for DDoS
+    CLASS_WEIGHTS = [1.0, 10.0]  # Higher weight for attacks
     RANDOM_STATE = 42
-
-    # Memory optimization
-    CHUNK_SIZE = 50000  # Rows per chunk
-    # Memory Limits
-    MAX_RAM_GB = 12  # Set to 80% of your available RAM
-    NODE_CHUNK_SIZE = 5000  # Reduce if still crashing
-    EDGE_CHUNK_SIZE = 100000
+    BALANCE_RATIO = 0.3  # Target ratio of benign:malicious samples
     
-    # Downsampling (if needed)
-    MAX_SAMPLES = 2000000  # Limit total samples
-    DOWNSAMPLE_RATIO = 0.5  # Random sampling ratio
-
+    # Feature processing
+    MAX_FEATURE_VALUE = 1e12
+    INF_REPLACEMENT = 1e12
+    
     # Focal Loss Parameters
     FOCAL_ALPHA = 0.75
     FOCAL_GAMMA = 2.0
-    
-    # Data Balancing
-    BALANCE_RATIO = 0.3  # Target ratio of benign:malicious samples
-
 
     @classmethod
     def update_feature_dimensions(cls, actual_features):

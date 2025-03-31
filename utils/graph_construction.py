@@ -1,71 +1,59 @@
 import networkx as nx
 import numpy as np
-from collections import defaultdict
 from tqdm import tqdm
 from config import Config
-import networkx as nx
-import numpy as np
-from tqdm import tqdm
+import gc
 
 def build_graph_from_partition(partition_file):
+    """Build graph with memory limits using Config"""
     try:
-        print("Loading data with rigorous index control...")
-        data = np.load(partition_file, allow_pickle=True)
-        
-        src_ips = data['src_ips'].astype('U15')
-        dst_ips = data['dst_ips'].astype('U15')
-        features = data['features'].astype(np.float32)
-        labels = data['labels'].astype(np.int8)
+        # Load with validation
+        data = np.load(partition_file)
+        required = ['features', 'labels', 'src_ips', 'dst_ips']
+        if not all(k in data for k in required):
+            raise KeyError(f"Partition missing required keys: {required}")
 
-        print("Creating deterministic IP mapping...")
-        unique_ips = np.unique(np.concatenate([src_ips, dst_ips]))
-        ip_to_idx = {ip: idx for idx, ip in enumerate(sorted(unique_ips))}
+        # Apply sampling if needed
+        n_samples = len(data['features'])
+        sample_size = min(n_samples, Config.MAX_GRAPH_NODES * 2)
+        idx = np.random.choice(n_samples, sample_size, replace=False)
         
-        print(f"Total unique IPs: {len(ip_to_idx)}")
-        
-        # Initialize graph with explicit node creation and feature initialization
+        features = data['features'][idx]
+        src_ips = data['src_ips'][idx]
+        dst_ips = data['dst_ips'][idx]
+
+        # Build graph with progress tracking
         G = nx.Graph()
-        feature_shape = features.shape[1]
+        ip_to_idx = {}
+        edge_count = 0
         
-        # Initialize ALL nodes with zero features first
-        for ip, idx in ip_to_idx.items():
-            G.add_node(idx, 
-                      features=np.zeros(feature_shape, dtype=np.float32),
-                      label=0)
-        
-        print("Processing edges with index validation...")
-        # Track which nodes actually have features
-        nodes_with_features = set()
-        
-        for i in tqdm(range(len(src_ips)), desc="Edge processing"):
-            src_idx = ip_to_idx[src_ips[i]]
-            dst_idx = ip_to_idx[dst_ips[i]]
-            
-            # Validate indices exist in graph
-            if not G.has_node(src_idx) or not G.has_node(dst_idx):
-                raise ValueError(f"Missing node(s) for edge {src_idx}-{dst_idx}")
-            
-            # Update node features (average with existing)
-            G.nodes[src_idx]['features'] = (G.nodes[src_idx]['features'] * len(nodes_with_features) + features[i]) / (len(nodes_with_features) + 1)
-            nodes_with_features.add(src_idx)
-            
-            G.nodes[src_idx]['label'] = max(G.nodes[src_idx]['label'], labels[i])
-            
-            # Add edge
+        print(f"Building graph (max {Config.MAX_GRAPH_NODES} nodes)...")
+        for i, (src, dst, feat) in tqdm(enumerate(zip(src_ips, dst_ips, features)), 
+                                       total=len(src_ips)):
+            if len(ip_to_idx) >= Config.MAX_GRAPH_NODES:
+                break
+            if edge_count >= Config.MAX_GRAPH_EDGES:
+                break
+
+            # Node management
+            for ip in [src, dst]:
+                if ip not in ip_to_idx:
+                    ip_to_idx[ip] = len(ip_to_idx)
+                    G.add_node(ip_to_idx[ip], features=feat)
+
+            # Edge management
+            src_idx, dst_idx = ip_to_idx[src], ip_to_idx[dst]
             if G.has_edge(src_idx, dst_idx):
-                G.edges[src_idx, dst_idx]['weight'] += 1
+                G[src_idx][dst_idx]['weight'] += 1
             else:
                 G.add_edge(src_idx, dst_idx, weight=1)
+                edge_count += 1
 
-        # Final sanity checks
-        print("\nGraph validation report:")
-        print(f"Total nodes: {len(G.nodes)}")
-        print(f"Node index range: {min(G.nodes)} to {max(G.nodes)}")
-        print(f"Total edges: {len(G.edges)}")
-        print(f"Nodes with features: {len(nodes_with_features)}")
-        
+        print(f"Built graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
         return G, ip_to_idx
 
     except Exception as e:
         print(f"Graph construction failed: {str(e)}")
         raise
+    finally:
+        gc.collect()

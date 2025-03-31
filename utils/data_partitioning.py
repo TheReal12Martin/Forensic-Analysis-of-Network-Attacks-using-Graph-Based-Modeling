@@ -1,115 +1,120 @@
-import pandas as pd
-import numpy as np
-from sklearn.preprocessing import StandardScaler
 import os
-from config import Config
 import gc
+from config import Config
+from utils.data_loader import process_and_save_partitions, balanced_data_generator
+import pandas as pd
 
-def balance_data(chunk):
-    """Balance the class distribution in the data chunk"""
-    benign_mask = chunk[Config.LABEL_COLUMN].str.strip().str.upper() == 'BENIGN'
-    benign_samples = chunk[benign_mask]
-    malicious_samples = chunk[~benign_mask]
+def validate_input_files():
+    """Validate input files using multiple patterns"""
+    from glob import glob
+    import os
     
-    n_benign = len(benign_samples)
-    n_malicious_target = int(n_benign / Config.BALANCE_RATIO)
+    # Get benign files
+    benign_files = glob(os.path.join(Config.DATA_FOLDER, Config.BENIGN_PATTERN))
     
-    # If we don't have enough malicious samples, take all we have
-    n_malicious = min(len(malicious_samples), n_malicious_target)
+    # Get malicious files using all patterns
+    malicious_files = []
+    for pattern in Config.MALICIOUS_PATTERNS:
+        matched_files = glob(os.path.join(Config.DATA_FOLDER, pattern))
+        # Exclude benign files and already matched files
+        matched_files = [f for f in matched_files 
+                       if "benign" not in os.path.basename(f).lower() and
+                       f not in malicious_files]
+        malicious_files.extend(matched_files)
     
-    balanced_chunk = pd.concat([
-        benign_samples,
-        malicious_samples.sample(n_malicious, random_state=Config.RANDOM_STATE)
-    ])
+    if not benign_files:
+        available = [f for f in os.listdir(Config.DATA_FOLDER) if f.endswith('.csv')]
+        raise FileNotFoundError(
+            f"No benign files found matching {Config.BENIGN_PATTERN}\n"
+            f"Available CSV files: {available}"
+        )
     
-    return balanced_chunk.sample(frac=1, random_state=Config.RANDOM_STATE)  # Shuffle
+    if not malicious_files:
+        available = [f for f in os.listdir(Config.DATA_FOLDER) if f.endswith('.csv')]
+        raise FileNotFoundError(
+            f"No malicious files found using patterns: {Config.MALICIOUS_PATTERNS}\n"
+            f"Available CSV files: {available}"
+        )
+    
+    print(f"Found {len(benign_files)} benign files")
+    print(f"Found {len(malicious_files)} malicious files:")
+    for f in malicious_files[:10]:  # Show first 10 for verification
+        print(f"- {os.path.basename(f)}")
+    
+    return True
 
-def partition_and_process(input_csv, partitions=4, output_dir="data_partitions"):
-    """Split large CSV into processed partitions with validation"""
+def clean_partition_directory(output_dir):
+    """Ensure clean output directory"""
+    if os.path.exists(output_dir):
+        for f in os.listdir(output_dir):
+            if f.startswith("partition_") and f.endswith(".npz"):
+                os.remove(os.path.join(output_dir, f))
+    else:
+        os.makedirs(output_dir)
+
+def partition_and_process(output_dir="data_partitions"):
+    """
+    Main function to process dataset into balanced partitions
+    Returns:
+        List of paths to created partition files
+    """
+    partition_files = []
+    
     try:
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+        # 1. Validation
+        print("Validating input files...")
+        validate_input_files()
         
-        # First verify the CSV has required columns
-        sample = pd.read_csv(input_csv, nrows=1)
-        missing_cols = [col for col in Config.NUMERIC_FEATURES + Config.CATEGORICAL_FEATURES 
-                      if col not in sample.columns]
-        if missing_cols:
-            raise ValueError(f"Missing columns in CSV: {missing_cols}")
-        del sample
-        gc.collect()
-
-        # Get total rows safely
-        with open(input_csv) as f:
-            total_rows = sum(1 for _ in f) - 1  # exclude header
+        # 2. Prepare output directory
+        clean_partition_directory(output_dir)
         
-        if total_rows <= 0:
-            raise ValueError("CSV file is empty or has only header")
+        # 3. Create balanced data generator
+        print("Creating balanced dataset generator...")
+        data_gen = balanced_data_generator()
         
-        rows_per_part = total_rows // partitions
-        partition_files = []
+        # 4. Process and save partitions
+        print(f"Creating partitions (max {Config.MAX_PARTITION_SIZE_GB}GB each)...")
+        partition_files = process_and_save_partitions(
+            data_gen,
+            output_dir=output_dir,
+            #max_size_mb=Config.MAX_PARTITION_SIZE_GB * 900  # 90% of target for safety
+        )
         
-        for i in range(partitions):
-            part_file = os.path.join(output_dir, f"partition_{i}.npz")
-            print(f"Creating partition {i+1}/{partitions}")
-            
-            try:
-                chunk = pd.read_csv(
-                    input_csv,
-                    skiprows=i * rows_per_part + 1,
-                    nrows=rows_per_part,
-                    names=pd.read_csv(input_csv, nrows=0).columns,
-                    dtype={
-                        **{col: np.float32 for col in Config.NUMERIC_FEATURES},
-                        **{col: 'category' for col in Config.CATEGORICAL_FEATURES},
-                        Config.LABEL_COLUMN: 'string'
-                    }
-                )
-                
-                # Balance the data before processing
-                chunk = balance_data(chunk)
-            except pd.errors.EmptyDataError:
-                raise ValueError(f"Partition {i} is empty - check your partitioning")
-
-            # Verify we got data
-            if len(chunk) == 0:
-                raise ValueError(f"Partition {i} is empty - check your partitioning")
-            
-            # Process numeric features
-            numeric = chunk[Config.NUMERIC_FEATURES].replace([np.inf, -np.inf], 1e12).fillna(0)
-            numeric = np.clip(numeric, -1e12, 1e12)
-            numeric = StandardScaler().fit_transform(numeric)
-            
-            # Process categorical features
-            categorical = pd.get_dummies(chunk[Config.CATEGORICAL_FEATURES], dummy_na=True)
-            
-            # Process labels
-            labels = (chunk[Config.LABEL_COLUMN]
-                     .str.strip()
-                     .str.upper()
-                     .map(Config.LABEL_MAPPING)
-                     .fillna(1)
-                     .astype(np.int8))
-            
-            # Save processed partition
-            np.savez_compressed(
-                part_file,
-                features=np.hstack([numeric, categorical]),
-                labels=labels.values,
-                src_ips=chunk[Config.SRC_IP_COL].values if Config.SRC_IP_COL in chunk.columns else None,
-                dst_ips=chunk[Config.DST_IP_COL].values if Config.DST_IP_COL in chunk.columns else None
-            )
-            
-            partition_files.append(part_file)
-            del chunk, numeric, categorical, labels
-            gc.collect()
+        # 5. Verify output
+        if not partition_files:
+            raise RuntimeError("No partitions were created - check data and memory limits")
+        
+        created_sizes = [os.path.getsize(f)/(1024**3) for f in partition_files]
+        print(f"Successfully created {len(partition_files)} partitions. Sizes (GB): {created_sizes}")
         
         return partition_files
         
     except Exception as e:
-        # Cleanup partial results
-        if 'partition_files' in locals():
+        print(f"\nError during partitioning: {str(e)}")
+        
+        # Clean up any partial results
+        if partition_files:
+            print("Cleaning up partial partitions...")
             for f in partition_files:
                 if os.path.exists(f):
                     os.remove(f)
-        raise ValueError(f"Partitioning failed: {str(e)}")
+        
+        raise
+    finally:
+        gc.collect()
+
+def get_partition_files(output_dir="data_partitions"):
+    """Get sorted list of partition files with validation"""
+    if not os.path.exists(output_dir):
+        raise FileNotFoundError(f"Output directory not found: {output_dir}")
+    
+    partition_files = sorted([
+        os.path.join(output_dir, f) 
+        for f in os.listdir(output_dir) 
+        if f.startswith("partition_") and f.endswith(".npz")
+    ])
+    
+    if not partition_files:
+        raise FileNotFoundError(f"No partition files found in {output_dir}")
+    
+    return partition_files
