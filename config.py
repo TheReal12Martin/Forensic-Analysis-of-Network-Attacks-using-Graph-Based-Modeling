@@ -15,20 +15,21 @@ class Config:
     LABEL_MAPPING = {
         'benign': 0,
         'BENIGN': 0,
+        'Benign': 0,
         'Bot': 1,
         'DDoS': 1,
         'Brute_Force_Web': 1,
         'Infiltration': 1,
-        'DoS_HULK': 1,
-        'DoS_SlowHTTP': 1,
-        'Brute_Force_XSS': 1,
-        'SQL_Injection': 1,
-        'DoS_Golden_Eye': 1,
-        'DoS_Slowloris': 1,
-        'DDoS_Loic_HTTP': 1,
-        'Brute_Force_FTP': 1,
-        'Brute_Force_SSH': 1,
-        'DDoS_HOIC': 1
+        'Dos_Hulk': 1,
+        'Dos_Slowhttp': 1,
+        'Brute_Force_Xss': 1,
+        'Sql_Injection': 1,
+        'Dos_Golden_Eye': 1,
+        'Dos_Slowloris': 1,
+        'Ddos_Loic_Http': 1,
+        'Brute_Force_Ftp': 1,
+        'Brute_Force_Ssh': 1,
+        'Ddos_Hoic': 1
     }
     
     # Feature Configuration (adjust based on your dataset)
@@ -50,10 +51,9 @@ class Config:
     CATEGORICAL_FEATURES = ['protocol']
     
     # Rest of your configuration remains the same...
-    MAX_PARTITION_SIZE_GB = 1.0  # Process up to 1GB at a time
-    MAX_SAMPLES = 5_000_000  # Limit total samples
-    MAX_PARTITION_SIZE_GB = 1.0
-    CHUNK_SIZE = 50_000  # Rows per chun
+    MAX_PARTITION_SIZE_GB = 2.0  # Process up to 1GB at a time
+    MAX_SAMPLES = 8_000_000  # Limit total samples
+    CHUNK_SIZE = 100_000  # Rows per chun
 
     MAX_GRAPH_NODES = 50000  # Maximum nodes per graph
     MAX_GRAPH_EDGES = 200000  # Maximum edges per graph

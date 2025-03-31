@@ -61,6 +61,11 @@ def count_rows_safely(files):
 
 def process_chunk(chunk):
     """Clean and prepare a data chunk"""
+    #Handle lables
+    if 'label' in chunk.columns:
+        chunk['label'] = chunk['label'].astype(str).str.strip().str.title()
+        chunk['label'] = chunk['label'].map(Config.LABEL_MAPPING).fillna(1)
+
     # Handle protocol
     if 'protocol' in chunk.columns:
         chunk['protocol'] = chunk['protocol'].astype(str).str.upper().str.strip().fillna('UNKNOWN')
@@ -73,45 +78,32 @@ def process_chunk(chunk):
     return chunk
 
 def balanced_data_generator():
-    """Memory-optimized generator with better error handling"""
-    from glob import glob
-    
-    # Get files with validation
-    benign_files = glob(os.path.join(Config.DATA_FOLDER, Config.BENIGN_PATTERN))
+    """Generates chunks with proper label mapping"""
+    # Get files
+    benign_files = glob.glob(os.path.join(Config.DATA_FOLDER, Config.BENIGN_PATTERN))
     malicious_files = []
     for pattern in Config.MALICIOUS_PATTERNS:
-        malicious_files.extend(glob(os.path.join(Config.DATA_FOLDER, pattern)))
-    
-    # Count rows safely
-    print("Counting dataset size...")
-    n_benign = min(count_rows_safely(benign_files), Config.MAX_SAMPLES // 2)
-    n_malicious = min(count_rows_safely(malicious_files), Config.MAX_SAMPLES // 2)
-    
-    if n_benign == 0 or n_malicious == 0:
-        raise ValueError("No valid data found in input files")
-    
-    sample_frac = min(1, (n_benign * Config.BALANCE_RATIO) / n_malicious)
-    print(f"Sampling strategy: {n_benign:,} benign vs {int(n_malicious*sample_frac):,} malicious")
-    
-    # Process files
-    processed = 0
+        malicious_files.extend(glob.glob(os.path.join(Config.DATA_FOLDER, pattern)))
+
+    # Process files with label mapping
     for file_path in benign_files + malicious_files:
-        is_malicious = "benign" not in os.path.basename(file_path).lower()
-        
         for chunk in load_chunk_safely(file_path):
             chunk = process_chunk(chunk)
             
-            if is_malicious:
-                chunk = chunk.sample(frac=sample_frac, random_state=Config.RANDOM_STATE)
+            # Apply label mapping
+            if 'label' in chunk.columns:  # If CSV has label column
+                chunk['label'] = chunk['label'].map(Config.LABEL_MAPPING).fillna(1)
+            else:  # Fallback to filename detection
+                is_malicious = "benign" not in os.path.basename(file_path).lower()
+                chunk['label'] = int(is_malicious)
             
-            chunk['label'] = int(is_malicious)
-            
+            # Verify we have both classes
+            unique_labels = chunk['label'].unique()
+            if len(unique_labels) < 2:
+                print(f"⚠️ Chunk from {os.path.basename(file_path)} has only labels: {unique_labels}")
+                continue
+                
             yield chunk
-            
-            processed += len(chunk)
-            if processed >= Config.MAX_SAMPLES:
-                return
-            gc.collect()
 
 def process_and_save_partitions(data_gen, output_dir="data_partitions"):
     os.makedirs(output_dir, exist_ok=True)
@@ -119,39 +111,42 @@ def process_and_save_partitions(data_gen, output_dir="data_partitions"):
     protocol_dummies = None
     partition_data = []
     partition_num = 0
-    
-    for chunk in tqdm(data_gen, desc="Processing", unit="chunk"):
-        # Process numeric features
+    total_samples = 0  # Track total samples to enforce MAX_SAMPLES
+
+    for chunk in tqdm(data_gen, desc="Processing Partitions"):
+        # Enforce MAX_SAMPLES limit
+        if total_samples >= Config.MAX_SAMPLES:
+            print(f"Stopping early: Reached MAX_SAMPLES ({Config.MAX_SAMPLES})")
+            break
+
+        # Process chunk (existing code)
         numeric = scaler.partial_fit(chunk[Config.NUMERIC_FEATURES]).transform(chunk[Config.NUMERIC_FEATURES])
-        
-        # Process categorical
         protocol = pd.get_dummies(chunk['protocol'].fillna('UNKNOWN'), prefix='proto', dtype=np.int8)
         if protocol_dummies is None:
             protocol_dummies = protocol.columns
         protocol = protocol.reindex(columns=protocol_dummies, fill_value=0)
-        
-        # Combine features
         features = np.hstack([numeric, protocol.values]).astype(np.float32)
-        
-        # Store data
+
         partition_data.append({
             'features': features,
             'labels': chunk['label'].values.astype(np.int8),
             'src_ips': chunk['src_ip'].astype('U15').values,
             'dst_ips': chunk['dst_ip'].astype('U15').values
         })
-        
-        # Check memory and save
-        if get_memory_usage() > Config.MAX_PARTITION_SIZE_GB * 900:
+        total_samples += len(chunk)  # Update counter
+
+        # Save partition if memory limit reached OR too many samples
+        if (get_memory_usage() > Config.MAX_PARTITION_SIZE_GB * 900 or
+            len(partition_data) > 10):  # Force save after 10 chunks
             save_partition(partition_data, output_dir, partition_num)
             partition_num += 1
             partition_data = []
             gc.collect()
-    
-    # Save final partition
+
+    # Save final partition if remaining
     if partition_data:
         save_partition(partition_data, output_dir, partition_num)
-    
+
     return sorted(glob.glob(os.path.join(output_dir, "partition_*.npz")))
 
 def save_partition(partition_data, output_dir, partition_num):
