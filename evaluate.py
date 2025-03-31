@@ -1,76 +1,63 @@
 import torch
-import torch.nn.functional as F
-from sklearn.metrics import classification_report, confusion_matrix
-from config import Config
+import numpy as np
+from sklearn.metrics import (
+    classification_report,
+    confusion_matrix,
+    roc_auc_score
+)
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-def evaluate_partition(model, data, partition_name=""):
-    """Comprehensive evaluation with better error handling"""
-    try:
-        print(f"\n=== Evaluating Partition {partition_name} ===")
-        model.eval()
+def evaluate_model(model, data, device):
+    """Evaluates model and prints metrics + plots"""
+    model.eval()
+    with torch.no_grad():
+        # Get predictions
+        logits = model(data.x.to(device), data.edge_index.to(device))
+        preds = logits.argmax(dim=1).cpu().numpy()
+        probs = torch.softmax(logits, dim=1).cpu().numpy()[:, 1]  # Malicious class prob
         
-        with torch.no_grad():
-            out = model(data.x, data.edge_index)
-            pred = out.argmax(dim=1)
-            
-            results = {}
-            for mask_name, mask in [('train', data.train_mask), 
-                                  ('val', data.val_mask), 
-                                  ('test', data.test_mask)]:
-                if mask.sum() == 0:
-                    continue
-                    
-                # Calculate basic metrics
-                correct = (pred[mask] == data.y[mask]).sum().item()
-                total = mask.sum().item()
-                acc = correct / total
-                loss = F.cross_entropy(out[mask], data.y[mask]).item()
-                
-                # Calculate class-wise metrics if CLASS_NAMES exists
-                report = ""
-                confusion = ""
-                try:
-                    report = classification_report(
-                        data.y[mask].cpu().numpy(),
-                        pred[mask].cpu().numpy(),
-                        target_names=Config.CLASS_NAMES,
-                        zero_division=0
-                    )
-                    confusion = confusion_matrix(
-                        data.y[mask].cpu().numpy(),
-                        pred[mask].cpu().numpy()
-                    )
-                except AttributeError:
-                    # Fallback if CLASS_NAMES not configured
-                    report = classification_report(
-                        data.y[mask].cpu().numpy(),
-                        pred[mask].cpu().numpy(),
-                        zero_division=0
-                    )
-                    confusion = confusion_matrix(
-                        data.y[mask].cpu().numpy(),
-                        pred[mask].cpu().numpy()
-                    )
-                
-                results[mask_name] = {
-                    'accuracy': acc,
-                    'loss': loss,
-                    'report': report,
-                    'confusion': confusion
-                }
+        # Ground truth
+        y_true = data.y[data.test_mask].cpu().numpy()
+        y_pred = preds[data.test_mask]
         
-        # Print results
-        for split, metrics in results.items():
-            print(f"\n{split.upper()} Results:")
-            print(f"Accuracy: {metrics['accuracy']:.4f}")
-            print(f"Loss: {metrics['loss']:.4f}")
-            print("\nClassification Report:")
-            print(metrics['report'])
-            print("\nConfusion Matrix:")
-            print(metrics['confusion'])
-        
-        return results
-        
-    except Exception as e:
-        print(f"\nEvaluation failed: {str(e)}")
-        raise
+        # Skip if only one class exists
+        if len(np.unique(y_true)) < 2:
+            print("⚠️ Evaluation skipped (only one class in test set)")
+            return
+
+        # 1. Classification Report
+        print("\n📊 Classification Report:")
+        print(classification_report(
+            y_true, y_pred,
+            target_names=['Benign', 'Malicious'],
+            labels=[0, 1],
+            zero_division=0
+        ))
+
+        # 2. Confusion Matrix
+        cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+        plt.figure(figsize=(6, 4))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                    xticklabels=['Benign', 'Malicious'],
+                    yticklabels=['Benign', 'Malicious'])
+        plt.title("Confusion Matrix")
+        plt.savefig("confusion_matrix.png")
+        plt.close()
+
+        # 3. ROC-AUC (if probabilities are available)
+        try:
+            roc_auc = roc_auc_score(y_true, probs[data.test_mask])
+            print(f"ROC-AUC Score: {roc_auc:.4f}")
+        except ValueError as e:
+            print(f"ROC-AUC failed: {str(e)}")
+
+def save_predictions(data, preds, output_path="predictions.csv"):
+    """Saves predictions for analysis"""
+    import pandas as pd
+    df = pd.DataFrame({
+        'true_label': data.y[data.test_mask].cpu().numpy(),
+        'predicted': preds[data.test_mask]
+    })
+    df.to_csv(output_path, index=False)
+    print(f"✅ Predictions saved to {output_path}")
