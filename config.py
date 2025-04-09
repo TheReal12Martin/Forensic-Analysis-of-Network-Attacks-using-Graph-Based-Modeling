@@ -1,15 +1,8 @@
 class Config:
     # Updated Data Configuration
     DATA_FOLDER = "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/BCCC-CIC2018"
-    BENIGN_PATTERN = "*benign*.csv"  # Pattern to match benign files
-    MALICIOUS_PATTERNS = ["*bot*.csv",
-                         "*dos*.csv",
-                         "*BF*.csv",
-                         "*SQL*.csv",
-                         "*infiltration*.csv",
-                         "*DoS*.csv",
-                         "*loic*.csv",
-                         "*hoic*.csv"]
+
+    DATA_PATTERN = "*merged*.csv"
     
     # Label Configuration
     LABEL_MAPPING = {
@@ -29,7 +22,11 @@ class Config:
         'Ddos_Loic_Http': 1,
         'Brute_Force_Ftp': 1,
         'Brute_Force_Ssh': 1,
-        'Ddos_Hoic': 1
+        'Ddos_Hoic': 1,
+        0: 0,
+        1: 1,
+        '0': 0,
+        '1': 1
     }
     
     # Feature Configuration (adjust based on your dataset)
@@ -51,12 +48,12 @@ class Config:
     CATEGORICAL_FEATURES = ['protocol']
     
     # Rest of your configuration remains the same...
-    MAX_PARTITION_SIZE_GB = 2.0  # Process up to 1GB at a time
-    MAX_SAMPLES = 8_000_000  # Limit total samples
+    MAX_PARTITION_SIZE_GB = 1.0  # Process up to 1GB at a time
+    MAX_SAMPLES = 1_000_000  # Limit total samples
     CHUNK_SIZE = 100_000  # Rows per chun
 
-    MAX_GRAPH_NODES = 50000  # Maximum nodes per graph
-    MAX_GRAPH_EDGES = 200000  # Maximum edges per graph
+    MAX_GRAPH_NODES = 5000  # Maximum nodes per graph
+    MAX_GRAPH_EDGES = 20000  # Maximum edges per graph
     
     CLASS_NAMES = {'Benign': 0, 'Malicious': 1}
 

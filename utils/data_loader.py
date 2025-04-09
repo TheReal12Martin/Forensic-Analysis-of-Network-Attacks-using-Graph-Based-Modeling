@@ -59,98 +59,91 @@ def count_rows_safely(files):
             counts.append(0)
     return sum(counts)
 
-def process_chunk(chunk):
-    """Clean and prepare a data chunk"""
-    #Handle lables
-    if 'label' in chunk.columns:
-        chunk['label'] = chunk['label'].astype(str).str.strip().str.title()
-        chunk['label'] = chunk['label'].map(Config.LABEL_MAPPING).fillna(1)
+def process_chunk(chunk_df):
+    """Process chunks with proper feature handling"""
+    try:
+        # Convert to dict if DataFrame
+        if hasattr(chunk_df, 'to_dict'):
+            chunk = {k: v.values if hasattr(v, 'values') else v 
+                    for k, v in chunk_df.to_dict('series').items()}
+        else:
+            chunk = chunk_df
 
-    # Handle protocol
-    if 'protocol' in chunk.columns:
-        chunk['protocol'] = chunk['protocol'].astype(str).str.upper().str.strip().fillna('UNKNOWN')
+        # Initialize output
+        processed = {
+            'features': None,
+            'labels': np.array([], dtype=np.int8),
+            'src_ips': np.array([], dtype='U15'),
+            'dst_ips': np.array([], dtype='U15'),
+            'protocol': np.array([], dtype='U15')
+        }
+
+        # Skip empty chunks
+        if not chunk.get('src_ip', []):
+            return None
+
+        # Process labels
+        if 'label' not in chunk:
+            raise ValueError("Label column missing")
+        processed['labels'] = np.array([
+            Config.LABEL_MAPPING.get(str(x).strip().title(), 1) 
+            for x in chunk['label']
+        ], dtype=np.int8)
+
+        # Process IPs
+        processed['src_ips'] = np.array(chunk['src_ip'], dtype='U15')
+        processed['dst_ips'] = np.array(chunk['dst_ip'], dtype='U15')
+        
+        # Process protocol
+        if 'protocol' in chunk:
+            processed['protocol'] = np.array(chunk['protocol'], dtype='U15')
+        
+        # Process numeric features
+        numeric_feats = []
+        for feat in Config.NUMERIC_FEATURES:
+            if feat in chunk:
+                col_data = np.array(chunk[feat], dtype=np.float32)
+                col_data = np.nan_to_num(col_data)
+                numeric_feats.append(col_data)
+        
+        if numeric_feats:
+            processed['features'] = np.column_stack(numeric_feats)
+
+        return processed
+
+    except Exception as e:
+        print(f"⚠️ Chunk processing failed: {str(e)}")
+        return None
     
-    # Clean numeric columns
-    for col in Config.NUMERIC_FEATURES:
-        if col in chunk.columns:
-            chunk[col] = pd.to_numeric(chunk[col], errors='coerce').fillna(0).astype('float32')
-    
-    return chunk
+
+
 
 def balanced_data_generator():
-    """Generates chunks with proper label mapping"""
-    # Get files
-    benign_files = glob.glob(os.path.join(Config.DATA_FOLDER, Config.BENIGN_PATTERN))
-    malicious_files = []
-    for pattern in Config.MALICIOUS_PATTERNS:
-        malicious_files.extend(glob.glob(os.path.join(Config.DATA_FOLDER, pattern)))
+    """Generator that yields processed chunks"""
+    all_files = glob.glob(os.path.join(Config.DATA_FOLDER, Config.DATA_PATTERN))
+    np.random.shuffle(all_files)
 
-    # Process files with label mapping
-    for file_path in benign_files + malicious_files:
-        for chunk in load_chunk_safely(file_path):
-            chunk = process_chunk(chunk)
-            
-            # Apply label mapping
-            if 'label' in chunk.columns:  # If CSV has label column
-                chunk['label'] = chunk['label'].map(Config.LABEL_MAPPING).fillna(1)
-            else:  # Fallback to filename detection
-                is_malicious = "benign" not in os.path.basename(file_path).lower()
-                chunk['label'] = int(is_malicious)
-            
-            # Verify we have both classes
-            unique_labels = chunk['label'].unique()
-            if len(unique_labels) < 2:
-                print(f"⚠️ Chunk from {os.path.basename(file_path)} has only labels: {unique_labels}")
-                continue
-                
-            yield chunk
+    for file_path in all_files:
+        try:
+            for chunk_df in load_chunk_safely(file_path):
+                processed = process_chunk(chunk_df)
+                if processed is None:
+                    continue
+                    
+                # Verify we have data
+                if len(processed['labels']) == 0:
+                    continue
+                    
+                yield processed
+                    
+        except Exception as e:
+            print(f"⚠️ Error processing {os.path.basename(file_path)}: {str(e)}")
+            continue
 
-def process_and_save_partitions(data_gen, output_dir="data_partitions"):
-    os.makedirs(output_dir, exist_ok=True)
-    scaler = StandardScaler()
-    protocol_dummies = None
-    partition_data = []
-    partition_num = 0
-    total_samples = 0  # Track total samples to enforce MAX_SAMPLES
 
-    for chunk in tqdm(data_gen, desc="Processing Partitions"):
-        # Enforce MAX_SAMPLES limit
-        if total_samples >= Config.MAX_SAMPLES:
-            print(f"Stopping early: Reached MAX_SAMPLES ({Config.MAX_SAMPLES})")
-            break
-
-        # Process chunk (existing code)
-        numeric = scaler.partial_fit(chunk[Config.NUMERIC_FEATURES]).transform(chunk[Config.NUMERIC_FEATURES])
-        protocol = pd.get_dummies(chunk['protocol'].fillna('UNKNOWN'), prefix='proto', dtype=np.int8)
-        if protocol_dummies is None:
-            protocol_dummies = protocol.columns
-        protocol = protocol.reindex(columns=protocol_dummies, fill_value=0)
-        features = np.hstack([numeric, protocol.values]).astype(np.float32)
-
-        partition_data.append({
-            'features': features,
-            'labels': chunk['label'].values.astype(np.int8),
-            'src_ips': chunk['src_ip'].astype('U15').values,
-            'dst_ips': chunk['dst_ip'].astype('U15').values
-        })
-        total_samples += len(chunk)  # Update counter
-
-        # Save partition if memory limit reached OR too many samples
-        if (get_memory_usage() > Config.MAX_PARTITION_SIZE_GB * 900 or
-            len(partition_data) > 10):  # Force save after 10 chunks
-            save_partition(partition_data, output_dir, partition_num)
-            partition_num += 1
-            partition_data = []
-            gc.collect()
-
-    # Save final partition if remaining
-    if partition_data:
-        save_partition(partition_data, output_dir, partition_num)
-
-    return sorted(glob.glob(os.path.join(output_dir, "partition_*.npz")))
 
 def save_partition(partition_data, output_dir, partition_num):
-    """Save partition with validation"""
+    """Save partition only if it contains both classes"""
     try:
         # Combine data
         features = np.vstack([d['features'] for d in partition_data])
@@ -158,10 +151,17 @@ def save_partition(partition_data, output_dir, partition_num):
         src_ips = np.concatenate([d['src_ips'] for d in partition_data])
         dst_ips = np.concatenate([d['dst_ips'] for d in partition_data])
 
-        # Validate
-        assert len(features) == len(labels) == len(src_ips) == len(dst_ips), "Length mismatch"
+        # Validate we have both classes
+        unique_labels, counts = np.unique(labels, return_counts=True)
+        if len(unique_labels) < 2:
+            print(f"⚠️ Discarding partition {partition_num} (only class {unique_labels[0]} with {counts[0]} samples)")
+            return None
 
-        # Save
+        # Validate array lengths
+        if not (len(features) == len(labels) == len(src_ips) == len(dst_ips)):
+            raise ValueError("Length mismatch between features and labels")
+
+        # Save valid partition
         path = os.path.join(output_dir, f"partition_{partition_num}.npz")
         np.savez_compressed(
             path,
@@ -170,8 +170,69 @@ def save_partition(partition_data, output_dir, partition_num):
             src_ips=src_ips.astype('U15'),
             dst_ips=dst_ips.astype('U15')
         )
-        print(f"Saved partition {partition_num} with {len(features):,} samples")
+        print(f"✅ Saved partition {partition_num} (Class 0: {counts[0]}, Class 1: {counts[1]})")
+        return path
 
     except Exception as e:
-        print(f"Error saving partition: {str(e)}")
-        raise
+        print(f"❌ Failed to save partition {partition_num}: {str(e)}")
+        return None
+
+def process_and_save_partitions(data_gen, output_dir="data_partitions"):
+    """Process data chunks into validated partitions"""
+    os.makedirs(output_dir, exist_ok=True)
+    scaler = StandardScaler()
+    protocol_dummies = None
+    partition_data = []
+    partition_num = 0
+    valid_partitions = []
+    
+    for chunk in tqdm(data_gen, desc="Creating Partitions"):
+        try:
+            # Skip empty chunks
+            if not chunk or len(chunk['labels']) == 0:
+                continue
+
+            # Process numeric features
+            numeric = scaler.partial_fit(chunk['features']).transform(chunk['features'])
+            
+            # Process protocol
+            protocol = pd.get_dummies(
+                pd.Series(chunk.get('protocol', ['UNKNOWN']*len(chunk['labels']))),
+                prefix='proto'
+            )
+            if protocol_dummies is None:
+                protocol_dummies = protocol.columns
+            protocol = protocol.reindex(columns=protocol_dummies, fill_value=0)
+            
+            features = np.hstack([numeric, protocol.values]).astype(np.float32)
+            
+            partition_data.append({
+                'features': features,
+                'labels': chunk['labels'],
+                'src_ips': chunk['src_ips'],
+                'dst_ips': chunk['dst_ips']
+            })
+
+            # Save when reaching size limit
+            if (get_memory_usage() > Config.MAX_PARTITION_SIZE_GB * 900 or
+                len(partition_data) >= 10):
+                
+                saved_path = save_partition(partition_data, output_dir, partition_num)
+                if saved_path:
+                    valid_partitions.append(saved_path)
+                    partition_num += 1
+                partition_data = []
+                gc.collect()
+                
+        except Exception as e:
+            print(f"⚠️ Chunk processing error: {str(e)}")
+            continue
+
+    # Save final partition if valid
+    if partition_data:
+        saved_path = save_partition(partition_data, output_dir, partition_num)
+        if saved_path:
+            valid_partitions.append(saved_path)
+
+    print(f"\nCreated {len(valid_partitions)} valid partitions out of {partition_num + 1} attempts")
+    return sorted(valid_partitions)

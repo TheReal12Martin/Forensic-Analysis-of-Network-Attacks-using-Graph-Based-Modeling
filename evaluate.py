@@ -22,6 +22,9 @@ def evaluate_model(model, data, device):
         print(y_true)
         y_pred = preds[data.test_mask]
         
+        unique, counts = np.unique(y_true, return_counts=True)
+        print(f"\n🔍 Test set class distribution: {dict(zip(unique, counts))}")
+        
         # Skip if only one class exists
         if len(np.unique(y_true)) < 2:
             print("⚠️ Evaluation skipped (only one class in test set)")

@@ -46,7 +46,7 @@ def convert_to_pyg_memory_safe(graph, device='cpu'):
         train_mask[indices[:train_size]] = True
         val_mask[indices[train_size:train_size + val_size]] = True
         test_mask[indices[train_size + val_size:]] = True
-        
+
         # Create and validate Data object
         data = Data(
             x=x,
@@ -58,6 +58,10 @@ def convert_to_pyg_memory_safe(graph, device='cpu'):
             test_mask=test_mask,
             num_nodes=num_nodes
         )
+        
+        # DEBUG: Verify class balance (now correctly placed after data creation)
+        print(f"🔍 Full dataset class balance: {torch.unique(data.y, return_counts=True)}")
+        print(f"🔍 Test set samples: {test_mask.sum().item()}")
         
         # Validate before moving to device
         if data.edge_index.max() >= data.num_nodes:

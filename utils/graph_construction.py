@@ -1,3 +1,4 @@
+import os
 import networkx as nx
 import numpy as np
 from tqdm import tqdm
@@ -5,55 +6,65 @@ from config import Config
 import gc
 
 def build_graph_from_partition(partition_file):
-    """Build graph with memory limits using Config"""
+    """Build graph only from valid partitions"""
     try:
-        # Load with validation
         data = np.load(partition_file)
-        required = ['features', 'labels', 'src_ips', 'dst_ips']
-        if not all(k in data for k in required):
-            raise KeyError(f"Partition missing required keys: {required}")
-
-        # Apply sampling if needed
-        n_samples = len(data['features'])
-        sample_size = min(n_samples, Config.MAX_GRAPH_NODES * 2)
-        idx = np.random.choice(n_samples, sample_size, replace=False)
         
-        features = data['features'][idx]
-        src_ips = data['src_ips'][idx]
-        dst_ips = data['dst_ips'][idx]
+        # Verify both classes exist
+        unique_labels = np.unique(data['labels'])
+        if len(unique_labels) < 2:
+            print(f"⚠️ Skipping {os.path.basename(partition_file)} - only class {unique_labels[0]} present")
+            return None, None
 
-        # Build graph with progress tracking
+        # Verify minimum samples
+        if len(data['labels']) < 1000:
+            print(f"⚠️ Skipping {os.path.basename(partition_file)} - only {len(data['labels'])} samples")
+            return None, None
+
+        # Sampling with class balance
+        benign_idx = np.where(data['labels'] == 0)[0]
+        malicious_idx = np.where(data['labels'] == 1)[0]
+        
+        sample_size = min(
+            Config.MAX_GRAPH_NODES // 2,
+            len(benign_idx),
+            len(malicious_idx)
+        )
+        
+        idx = np.concatenate([
+            np.random.choice(benign_idx, sample_size, replace=False),
+            np.random.choice(malicious_idx, sample_size, replace=False)
+        ])
+
+        # Graph construction
         G = nx.Graph()
         ip_to_idx = {}
-        edge_count = 0
         
-        print(f"Building graph (max {Config.MAX_GRAPH_NODES} nodes)...")
-        for i, (src, dst, feat) in tqdm(enumerate(zip(src_ips, dst_ips, features)), 
-                                       total=len(src_ips)):
-            if len(ip_to_idx) >= Config.MAX_GRAPH_NODES:
-                break
-            if edge_count >= Config.MAX_GRAPH_EDGES:
-                break
+        for i in tqdm(idx, desc="Building graph"):
+            src = data['src_ips'][i]
+            dst = data['dst_ips'][i]
+            feat = data['features'][i]
+            label = data['labels'][i]
 
-            # Node management
+            # Add nodes
             for ip in [src, dst]:
                 if ip not in ip_to_idx:
                     ip_to_idx[ip] = len(ip_to_idx)
-                    G.add_node(ip_to_idx[ip], features=feat)
+                    G.add_node(ip_to_idx[ip], features=feat, label=label)
 
-            # Edge management
-            src_idx, dst_idx = ip_to_idx[src], ip_to_idx[dst]
-            if G.has_edge(src_idx, dst_idx):
-                G[src_idx][dst_idx]['weight'] += 1
+            # Add edge
+            if G.has_edge(ip_to_idx[src], ip_to_idx[dst]):
+                G[ip_to_idx[src]][ip_to_idx[dst]]['weight'] += 1
             else:
-                G.add_edge(src_idx, dst_idx, weight=1)
-                edge_count += 1
+                G.add_edge(ip_to_idx[src], ip_to_idx[dst], weight=1)
 
-        print(f"Built graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
+        print(f"✅ Built graph from {os.path.basename(partition_file)} "
+              f"({len(G.nodes)} nodes, {len(G.edges)} edges) "
+              f"Class balance: {dict(zip(*np.unique(data['labels'][idx], return_counts=True)))}")
         return G, ip_to_idx
 
     except Exception as e:
-        print(f"Graph construction failed: {str(e)}")
-        raise
+        print(f"❌ Graph construction failed: {str(e)}")
+        return None, None
     finally:
         gc.collect()
