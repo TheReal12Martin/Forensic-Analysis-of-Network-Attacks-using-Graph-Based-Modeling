@@ -1,6 +1,8 @@
 import torch
 from config import Config
-from train import train_partition
+from utils.pyg_conversion import convert_to_pyg_memory_safe
+from utils.graph_construction import build_graph_from_partition
+from train import train_model
 from evaluate import evaluate_model
 from utils.monitoring import initialize_monitoring, log_resource_usage
 import gc
@@ -23,26 +25,30 @@ def main():
     
     device = torch.device('cpu')
     
-    for i, partition_file in enumerate(partition_files):
+    for i, pfile in enumerate(partition_files):
         print(f"\n=== Processing Partition {i+1}/{len(partition_files)} ===")
         log_resource_usage(f"Before partition {i+1}")
         
-        # Train
-        model, data = train_partition(partition_file)
+        # Build and convert graph
+        graph, _ = build_graph_from_partition(pfile)
+        data = convert_to_pyg_memory_safe(graph, device)
         
-        # Evaluate
-        if model is not None and data is not None:
-            evaluate_model(model, data, device)
+        if data:
+            # Train and evaluate
+            model, avg_acc = train_model(data, device)
+            if model:
+                evaluate_model(model, data, device)
+                print(f"Average validation accuracy: {avg_acc:.2f}")
+            
+            # Cleanup
+            del model, data, graph
+            gc.collect()
         
-        # Cleanup
-        del model, data
-        gc.collect()
         log_resource_usage(f"After partition {i+1}")
     
     print("\n=== Training Completed ===")
-    log_resource_usage("End of training")
+    log_resource_usage("End")
 
 if __name__ == "__main__":
-    # Set lowest priority
-    os.nice(19)
+    os.nice(19)  # Lower priority
     main()

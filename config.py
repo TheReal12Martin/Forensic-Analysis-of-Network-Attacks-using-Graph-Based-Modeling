@@ -84,10 +84,10 @@ class Config:
     
     
     # Model Architecture
-    HIDDEN_CHANNELS = 256
+    HIDDEN_CHANNELS = 128
     NUM_CLASSES = 2
     DROPOUT = 0.7
-    HEADS = 8
+    HEADS = 4
     GAT_LAYERS = 3
     
     # Training
