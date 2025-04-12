@@ -56,7 +56,7 @@ class Config:
     MAX_SAMPLES = 1_000_000  # Limit total samples
     CHUNK_SIZE = 100_000  # Rows per chun
 
-    MAX_GRAPH_NODES = 1000  # Maximum nodes per graph
+    MAX_GRAPH_NODES = 5000  # Maximum nodes per graph
     MAX_NODE_DEGREE = 5000
     MAX_GRAPH_EDGES = 5000  # Maximum edges per graph
     MIN_EDGE_WEIGHT = 1
@@ -84,11 +84,11 @@ class Config:
     
     
     # Model Architecture
-    HIDDEN_CHANNELS = 16
+    HIDDEN_CHANNELS = 64
     NUM_CLASSES = 2
     DROPOUT = 0.5
-    HEADS = 2
-    GAT_LAYERS = 2
+    HEADS = 4
+    GAT_LAYERS = 3
     
     # Training
     TEST_RATIO = 0.2
