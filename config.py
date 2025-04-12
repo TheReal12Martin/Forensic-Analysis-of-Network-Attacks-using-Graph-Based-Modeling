@@ -60,14 +60,14 @@ class Config:
     MAX_NODE_DEGREE = 5000
     MAX_GRAPH_EDGES = 5000  # Maximum edges per graph
     MIN_EDGE_WEIGHT = 1
-    BATCH_SIZE = 128
+    BATCH_SIZE = 256
     GRADIENT_ACCUMULATION_STEPS = 4
 
     MIN_TEST_SAMPLES = 100       # Minimum samples per class in test set
     MIN_VAL_ACC = 0.7
 
     MIN_SAMPLES_PER_CLASS = 1000  # Minimum samples per class to process
-    K_NEIGHBORS = 5               # For KNN graph construction
+    K_NEIGHBORS = 10               # For KNN graph construction
     SIMILARITY_THRESHOLD = 0.7    # Cosine similarity threshold
     
     CLASS_NAMES = {'Benign': 0, 'Malicious': 1}
@@ -84,17 +84,17 @@ class Config:
     
     
     # Model Architecture
-    HIDDEN_CHANNELS = 64
+    HIDDEN_CHANNELS = 256
     NUM_CLASSES = 2
-    DROPOUT = 0.5
-    HEADS = 4
+    DROPOUT = 0.7
+    HEADS = 8
     GAT_LAYERS = 3
     
     # Training
     TEST_RATIO = 0.2
     VAL_RATIO = 0.2
     EPOCHS = 100
-    LEARNING_RATE = 0.01
+    LEARNING_RATE = 0.001
     WEIGHT_DECAY = 1e-4
     MIN_DELTA = 0.005
     PATIENCE = 20
