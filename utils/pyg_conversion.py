@@ -3,79 +3,53 @@ from torch_geometric.data import Data
 import numpy as np
 from tqdm import tqdm
 from config import Config
+from sklearn.model_selection import train_test_split
 import gc
 
-def convert_to_pyg_memory_safe(graph, device='cpu'):
+def convert_to_pyg_memory_safe(graph, device):
     try:
-        nodes = sorted(graph.nodes())
+        nodes = list(graph.nodes())
         num_nodes = len(nodes)
         
-        # Initialize tensors
-        x = torch.zeros((num_nodes, len(graph.nodes[0]['features'])), dtype=torch.float32)
-        y = torch.zeros(num_nodes, dtype=torch.long)
+        # Process features
+        x = torch.stack([
+            torch.from_numpy(graph.nodes[n]['features'].astype(np.float32)) 
+            for n in nodes
+        ])
         
-        # Process nodes in chunks
-        chunk_size = 50000
-        for i in range(0, num_nodes, chunk_size):
-            chunk_nodes = nodes[i:i+chunk_size]
-            for n in chunk_nodes:
-                x[n] = torch.from_numpy(graph.nodes[n]['features'])
-                y[n] = graph.nodes[n].get('label', 0)
+        # Convert labels to int64 (Long) explicitly
+        y = torch.tensor(
+            [graph.nodes[n]['label'] for n in nodes],
+            dtype=torch.long  # Explicitly set to long
+        )
         
         # Process edges
-        edges = list(graph.edges(data='weight'))
-        edge_index = torch.zeros((2, len(edges)*2), dtype=torch.long)
-        edge_attr = torch.zeros(len(edges)*2, dtype=torch.float32)
+        edge_index = []
+        edge_attr = []
+        for u, v, data in graph.edges(data=True):
+            edge_index.append([u, v])
+            edge_attr.append(data.get('weight', 1.0))
         
-        for i, (u, v, w) in enumerate(tqdm(edges, desc="Processing edges")):
-            edge_index[:, i*2] = torch.tensor([u, v])
-            edge_index[:, i*2+1] = torch.tensor([v, u])
-            edge_attr[i*2] = edge_attr[i*2+1] = w if w is not None else 1.0
+        edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+        edge_attr = torch.tensor(edge_attr, dtype=torch.float32)
         
-        # Create train/val/test masks
-        num_nodes = len(y)
+        # Create masks
         indices = torch.randperm(num_nodes)
+        train_size = int(0.6 * num_nodes)
+        val_size = int(0.2 * num_nodes)
         
-        train_size = int(num_nodes * (1 - Config.TEST_RATIO - Config.VAL_RATIO))
-        val_size = int(num_nodes * Config.VAL_RATIO)
-        
-        train_mask = torch.zeros(num_nodes, dtype=torch.bool)
-        val_mask = torch.zeros(num_nodes, dtype=torch.bool)
-        test_mask = torch.zeros(num_nodes, dtype=torch.bool)
-        
-        train_mask[indices[:train_size]] = True
-        val_mask[indices[train_size:train_size + val_size]] = True
-        test_mask[indices[train_size + val_size:]] = True
-
-        # Create and validate Data object
         data = Data(
             x=x,
             edge_index=edge_index,
             edge_attr=edge_attr,
-            y=y,
-            train_mask=train_mask,
-            val_mask=val_mask,
-            test_mask=test_mask,
-            num_nodes=num_nodes
+            y=y,  # Now properly typed as long
+            train_mask=indices[:train_size],
+            val_mask=indices[train_size:train_size+val_size],
+            test_mask=indices[train_size+val_size:]
         )
         
-        # DEBUG: Verify class balance (now correctly placed after data creation)
-        print(f"🔍 Full dataset class balance: {torch.unique(data.y, return_counts=True)}")
-        print(f"🔍 Test set samples: {test_mask.sum().item()}")
-        
-        # Validate before moving to device
-        if data.edge_index.max() >= data.num_nodes:
-            raise ValueError("Invalid edge indices detected")
-        
-        # Move to device
-        data = data.to(device)
-        print(f"Successfully moved data to {device}")
-        
-        return data
+        return data.to(device)
         
     except Exception as e:
-        print(f"PyG conversion failed: {str(e)}")
-        raise
-    finally:
-        gc.collect()
-        torch.cuda.empty_cache()
+        print(f"Conversion failed: {str(e)}")
+        return None
