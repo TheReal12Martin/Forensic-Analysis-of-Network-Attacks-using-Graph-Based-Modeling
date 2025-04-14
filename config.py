@@ -70,9 +70,11 @@ class Config:
     MIN_TEST_SAMPLES = 100       # Minimum samples per class in test set
     MIN_VAL_ACC = 0.7
 
-    MIN_SAMPLES_PER_CLASS = 1000  # Minimum samples per class to process
-    K_NEIGHBORS = 10               # For KNN graph construction
+    MIN_SAMPLES_PER_CLASS = 100  # Minimum samples per class to process
+    K_NEIGHBORS = 5               # For KNN graph construction
     MIN_SIMILARITY = 0.7    # Cosine similarity threshold
+    MIN_NEIGHBORS = 1             # Minimum neighbors for kNN
+    MAX_NEIGHBORS = 5
     USE_EDGE_FEATURES = True
     
     CLASS_NAMES = {'Benign': 0, 'Malicious': 1}
@@ -106,6 +108,10 @@ class Config:
     CLASS_WEIGHTS = [1.0, 5.0]  # Higher weight for attacks
     RANDOM_STATE = 42
     BALANCE_RATIO = 0.5  # Target ratio of benign:malicious samples
+
+    MIN_TRAIN_SAMPLES = 6         # Minimum training samples
+    MIN_VAL_SAMPLES = 3           # Minimum validation samples
+    MIN_TEST_SAMPLES = 3
     
     # Feature processing
     MAX_FEATURE_VALUE = 1e12

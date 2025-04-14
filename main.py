@@ -29,21 +29,47 @@ def main():
         print(f"\n=== Processing Partition {i+1}/{len(partition_files)} ===")
         log_resource_usage(f"Before partition {i+1}")
         
-        # Build and convert graph
-        graph, _ = build_graph_from_partition(pfile)
-        data = convert_to_pyg_memory_safe(graph, device)
-        
-        if data:
-            # Train and evaluate
+        try:
+            # Graph building with size validation
+            graph, _ = build_graph_from_partition(pfile)
+            if graph is None:
+                print(f"Skipping partition {i+1} - graph construction failed")
+                log_resource_usage(f"Skipped partition {i+1}")
+                continue
+                
+            if graph.number_of_nodes() < Config.MIN_GRAPH_NODES:
+                print(f"Skipping partition {i+1} - only {graph.number_of_nodes()} nodes")
+                continue
+                
+            # Conversion with validation
+            data = convert_to_pyg_memory_safe(graph, device)
+            if not data:
+                print(f"Skipping partition {i+1} - conversion failed")
+                continue
+                
+            # Training validation
+            if sum(data.val_mask) < Config.MIN_VAL_SAMPLES:
+                print(f"Skipping training - only {sum(data.val_mask)} validation samples")
+                continue
+                
+            # Proceed with training
             model, avg_acc = train_model(data, device)
             if model:
-                evaluate_model(model, data, device)
+                if sum(data.test_mask) >= Config.MIN_TEST_SAMPLES:
+                    evaluate_model(model, data, device)
+                else:
+                    print(f"Not enough test samples ({sum(data.test_mask)}) for evaluation")
+                    
                 print(f"Average validation accuracy: {avg_acc:.2f}")
             
             # Cleanup
             del model, data, graph
             gc.collect()
-        
+            
+        except Exception as e:
+            print(f"Partition {i+1} failed: {str(e)}")
+            continue
+            
         log_resource_usage(f"After partition {i+1}")
     
     print("\n=== Training Completed ===")
