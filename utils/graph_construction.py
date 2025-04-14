@@ -7,61 +7,47 @@ import gc
 
 def build_graph_from_partition(partition_file):
     try:
-        # Memory-mapped loading with manual chunking
         data = np.load(partition_file, mmap_mode='r')
         
-        # Get minimum samples (reduced further)
-        min_samples = min(
-            len(np.where(data['labels'] == 0)[0]),
-            len(np.where(data['labels'] == 1)[0]),
-            Config.MAX_GRAPH_NODES // 4  # Only use 25% of max nodes
-        )
+        # Dynamic sampling based on class balance
+        class_0_idx = np.where(data['labels'] == 0)[0]
+        class_1_idx = np.where(data['labels'] == 1)[0]
+        min_samples = min(len(class_0_idx), len(class_1_idx), Config.MAX_GRAPH_NODES//2)
         
-        # Select indices
-        idx0 = np.random.choice(
-            np.where(data['labels'] == 0)[0], 
-            min_samples, 
-            replace=False
-        )
-        idx1 = np.random.choice(
-            np.where(data['labels'] == 1)[0], 
-            min_samples, 
-            replace=False
-        )
-        selected_idx = np.concatenate([idx0, idx1])
+        # Stratified sampling with feature diversity
+        def get_diverse_samples(indices, k):
+            from sklearn.cluster import KMeans
+            kmeans = KMeans(n_clusters=k, random_state=Config.RANDOM_STATE)
+            kmeans.fit(data['features'][indices])
+            _, sample_indices = np.unique(kmeans.labels_, return_index=True)
+            return indices[sample_indices]
+        
+        selected_idx = np.concatenate([
+            get_diverse_samples(class_0_idx, min_samples//2),
+            get_diverse_samples(class_1_idx, min_samples//2)
+        ])
 
-        # Build tiny graph
+        # Enhanced edge construction with feature similarity
         G = nx.Graph()
-        features = []
+        features = data['features'][selected_idx]
         
-        # Process in nano-batches
-        for i in range(0, len(selected_idx), 100):  # 100-sample chunks
-            chunk = selected_idx[i:i+100]
-            chunk_data = data['features'][chunk]
-            for j, idx in enumerate(chunk):
-                node_id = i + j  # Simple 0-based indexing
-                G.add_node(node_id, features=chunk_data[j], label=data['labels'][idx])
-                features.append(chunk_data[j])
-                
-                if G.number_of_nodes() >= Config.MAX_GRAPH_NODES:
-                    break
-
-        # Tiny edge construction (very sparse)
-        if len(features) > 1:
-            from sklearn.neighbors import NearestNeighbors
-            nbrs = NearestNeighbors(n_neighbors=2).fit(features)
-            distances, indices = nbrs.kneighbors(features)
-            
-            for i, (dists, neighbors) in enumerate(zip(distances, indices)):
-                for j, d in zip(neighbors, dists):
-                    if i != j and d < 0.9:  # Strict similarity threshold
-                        G.add_edge(i, j, weight=1-d)
-                        if G.number_of_edges() >= Config.MAX_GRAPH_EDGES:
-                            break
-
-        print(f"Built micro-graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+        for i, idx in enumerate(selected_idx):
+            G.add_node(i, features=features[i], label=data['labels'][idx])
+        
+        # Improved similarity edges
+        from sklearn.neighbors import NearestNeighbors
+        nbrs = NearestNeighbors(n_neighbors=5, metric='cosine').fit(features)
+        distances, indices = nbrs.kneighbors(features)
+        
+        for i, (dists, neighbors) in enumerate(zip(distances, indices)):
+            for j, d in zip(neighbors, dists):
+                if i != j and d < 0.7:  # Stricter similarity threshold
+                    weight = 1 - (d * (1 + G.degree(i)/10))  # Degree-adjusted weight
+                    G.add_edge(i, j, weight=weight)
+                    
+        print(f"Built enhanced graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
         return G, None
-
+        
     except Exception as e:
         print(f"Graph build failed: {str(e)}")
         return None, None
