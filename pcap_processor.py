@@ -1,3 +1,4 @@
+import tempfile
 import time
 import pyshark
 import numpy as np
@@ -17,6 +18,7 @@ class PCAPProcessor:
         self.packet_count = 0
         self.last_report = time.time()
         self.start_time = time.time()
+        self.temp_dir = tempfile.mkdtemp()  # Store large data on disk
 
     def process_pcap(self, pcap_path: str, max_packets: Optional[int] = None) -> Optional[Dict]:
         """Process PCAP file into graph data with 13 features per node"""
