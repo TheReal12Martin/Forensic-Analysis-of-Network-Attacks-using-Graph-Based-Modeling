@@ -9,6 +9,7 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.cluster import KMeans
 from imblearn.over_sampling import SMOTE
 from sklearn.utils import resample
+from imblearn.over_sampling import ADASYN, SMOTE
 
 def _safe_load_data(partition_file):
     """Load data safely into memory for modification"""
@@ -20,25 +21,43 @@ def _safe_load_data(partition_file):
             'dst_ips': data['dst_ips'].copy() if 'dst_ips' in data else None
         }
 
+def _apply_smote(features, labels, minority_count):
+    smote = SMOTE(
+        sampling_strategy=min(0.5, Config.IMBALANCE_THRESHOLD/10),
+        k_neighbors=min(Config.SMOTE_NEIGHBORS, minority_count-1),
+        random_state=Config.RANDOM_STATE
+    )
+    return smote.fit_resample(features, labels)
+
+def _apply_adasyn(features, labels, minority_count):
+    ada = ADASYN(
+        sampling_strategy=min(0.5, Config.IMBALANCE_THRESHOLD/5),
+        n_neighbors=min(Config.ADASYN_NEIGHBORS, minority_count-1),
+        random_state=Config.RANDOM_STATE
+    )
+    return ada.fit_resample(features, labels)
+
 def _handle_imbalance(features, labels):
-    """Apply imbalance correction with safety checks"""
-    # Calculate current class distribution
+    """Hybrid imbalance correction with auto-selection"""
     class_counts = np.bincount(labels)
     minority_class = 1 if class_counts[1] < class_counts[0] else 0
     minority_count = class_counts[minority_class]
+    imbalance_ratio = max(class_counts)/max(1, minority_count)
     
-    if Config.SMOTE_ENABLED and minority_count >= 2:
-        try:
-            smote = SMOTE(
-                sampling_strategy=min(0.5, Config.IMBALANCE_THRESHOLD/10),
-                random_state=Config.RANDOM_STATE,
-                k_neighbors=min(Config.SMOTE_K_NEIGHBORS, minority_count-1)
-            )
-            features_res, labels_res = smote.fit_resample(features, labels)
-            print(f"Generated {sum(labels_res == 1)} malicious samples via SMOTE")
-            return features_res, labels_res
-        except Exception as e:
-            print(f"SMOTE failed: {str(e)} - using random oversampling")
+    try:
+        if Config.IMBALANCE_METHOD == 'auto':
+            if imbalance_ratio > Config.AUTO_SMOTE_THRESHOLD:
+                print("⚡ Using SMOTE for extreme imbalance")
+                return _apply_smote(features, labels, minority_count)
+            else:
+                print("⚡ Using ADASYN for moderate imbalance")
+                return _apply_adasyn(features, labels, minority_count)
+        elif Config.IMBALANCE_METHOD == 'smote':
+            return _apply_smote(features, labels, minority_count)
+        elif Config.IMBALANCE_METHOD == 'adasyn':
+            return _apply_adasyn(features, labels, minority_count)
+    except Exception as e:
+        print(f"⚠️ {Config.IMBALANCE_METHOD} failed: {str(e)} - using random oversampling")
     
     # Random oversampling fallback
     minority_idx = np.where(labels == minority_class)[0]
@@ -62,21 +81,17 @@ def build_graph_from_partition(partition_file):
     try:
         # 1. Load data safely
         data = _safe_load_data(partition_file)
-        features = data['features']
-        labels = data['labels']
+        features, labels = data['features'], data['labels']
         
-        # 2. Calculate and handle imbalance
+        # Calculate initial imbalance
         class_counts = np.bincount(labels)
-        imbalance_ratio = max(class_counts[0]/max(1,class_counts[1]), 
-                          class_counts[1]/max(1,class_counts[0]))
+        imbalance_ratio = max(class_counts)/max(1, min(class_counts))
         
         if imbalance_ratio > Config.IMBALANCE_THRESHOLD:
-            print(f"⚠️ Extreme imbalance ({imbalance_ratio:.1f}:1) - applying correction")
+            print(f"⚠️ Imbalance {imbalance_ratio:.1f}:1 - applying correction")
             features, labels = _handle_imbalance(features, labels)
-            class_counts = np.bincount(labels)
-            imbalance_ratio = max(class_counts[0]/max(1,class_counts[1]), 
-                              class_counts[1]/max(1,class_counts[0]))
-            print(f"→ New imbalance ratio: {imbalance_ratio:.1f}:1")
+            new_counts = np.bincount(labels)
+            print(f"→ New distribution: Class 0={new_counts[0]}, Class 1={new_counts[1]}")
 
         # 3. Validate minimum samples
         if any(c < Config.MIN_SAMPLES_PER_CLASS for c in class_counts):

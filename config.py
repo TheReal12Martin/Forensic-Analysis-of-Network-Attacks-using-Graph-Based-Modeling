@@ -104,6 +104,12 @@ class Config:
     # Calculated dimensions
     PROTOCOL_DIM = 3  # TCP, UDP, ICMP
     INPUT_FEATURES = len(NUMERIC_FEATURES) + PROTOCOL_DIM
+
+
+    IMBALANCE_METHOD = 'auto'  # Options: 'smote', 'adasyn', 'random_oversample', 'auto'
+    AUTO_SMOTE_THRESHOLD = 100.0    # Use SMOTE when imbalance > this value
+    ADASYN_NEIGHBORS = 3         # Number of neighbors for ADASYN
+    SMOTE_NEIGHBORS = 5          # Keep for backward compatibility
     
     
     # Model Architecture
