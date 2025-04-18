@@ -106,7 +106,7 @@ class Config:
     INPUT_FEATURES = len(NUMERIC_FEATURES) + PROTOCOL_DIM
 
 
-    IMBALANCE_METHOD = 'auto'  # Options: 'smote', 'adasyn', 'random_oversample', 'auto'
+    IMBALANCE_METHOD = 'smote'  # Options: 'smote', 'adasyn', 'random_oversample', 'auto'
     AUTO_SMOTE_THRESHOLD = 100.0    # Use SMOTE when imbalance > this value
     ADASYN_NEIGHBORS = 3         # Number of neighbors for ADASYN
     SMOTE_NEIGHBORS = 5          # Keep for backward compatibility
@@ -127,7 +127,7 @@ class Config:
     WEIGHT_DECAY = 1e-4
     MIN_DELTA = 0.005
     PATIENCE = 20
-    CLASS_WEIGHTS = [1.0, 10.0]  # Higher weight for attacks
+    CLASS_WEIGHTS = [1.0, 15.0]  # Higher weight for attacks
     RANDOM_STATE = 42
     BALANCE_RATIO = 0.5  # Target ratio of benign:malicious samples
 
@@ -141,7 +141,7 @@ class Config:
     
     # Focal Loss Parameters
     FOCAL_ALPHA = 0.85
-    FOCAL_GAMMA = 2.0
+    FOCAL_GAMMA = 3.0
 
     CPU_THREADS = 2  # Optimal for most systems
     FORCE_SINGLE_CORE = False  # Set True if still seeing high CPU
