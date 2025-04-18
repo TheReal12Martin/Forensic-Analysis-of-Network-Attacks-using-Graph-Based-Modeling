@@ -7,6 +7,7 @@ from sklearn.model_selection import train_test_split
 import gc
 
 def convert_to_pyg_memory_safe(graph, device):
+    """Convert networkx graph to PyG Data with strict validation"""
     if graph is None:
         print("No graph provided")
         return None
@@ -19,48 +20,91 @@ def convert_to_pyg_memory_safe(graph, device):
     try:
         nodes = list(graph.nodes())
         
-        # Feature matrix
-        x = torch.stack([
-            torch.from_numpy(graph.nodes[n]['features'].astype(np.float32)) 
-            for n in nodes
-        ])
+        # Feature matrix with duplicate checking
+        unique_features = []
+        unique_indices = []
+        feature_set = set()
+        
+        for n in nodes:
+            feat = tuple(graph.nodes[n]['features'].astype(np.float32).round(4))
+            if feat not in feature_set:
+                feature_set.add(feat)
+                unique_features.append(graph.nodes[n]['features'])
+                unique_indices.append(n)
+        
+        if len(unique_features) < num_nodes:
+            print(f"Removed {num_nodes - len(unique_features)} duplicates during conversion")
+            num_nodes = len(unique_features)
+        
+        x = torch.stack([torch.from_numpy(feat) for feat in unique_features])
         
         # Labels
         y = torch.tensor(
-            [graph.nodes[n]['label'] for n in nodes],
+            [graph.nodes[n]['label'] for n in unique_indices],
             dtype=torch.long
         )
         
-        # Edge processing
-        edge_index, edge_attr = [], []
-        for u, v, data in graph.edges(data=True):
-            edge_index.append([u, v])
-            edge_attr.append(data.get('weight', 1.0))
+        # Edge processing with relabeling
+        edge_index = []
+        edge_attr = []
+        node_mapping = {old_idx: new_idx for new_idx, old_idx in enumerate(unique_indices)}
         
-        if not edge_index:  # Handle empty graphs
-            print("No edges in graph")
+        for u, v, data in graph.edges(data=True):
+            if u in node_mapping and v in node_mapping:
+                edge_index.append([node_mapping[u], node_mapping[v]])
+                edge_attr.append(data.get('weight', 1.0))
+        
+        if not edge_index:
+            print("No valid edges in graph")
             return None
             
         edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
         edge_attr = torch.tensor(edge_attr, dtype=torch.float32)
         
-        # Train/val/test split with minimum sizes
-        num_train = max(int(0.6 * num_nodes), Config.MIN_TRAIN_SAMPLES)
-        num_val = max(int(0.2 * num_nodes), Config.MIN_VAL_SAMPLES)
+        # Stratified splitting with strict no-overlap
+        indices = torch.arange(num_nodes)
+        labels = y.cpu().numpy()
         
-        if num_nodes < (num_train + num_val + Config.MIN_TEST_SAMPLES):
-            print(f"Insufficient nodes ({num_nodes}) for proper splitting")
+        # First split: train vs temp (val+test)
+        idx_train, idx_temp = train_test_split(
+            indices,
+            train_size=0.6,
+            stratify=labels,
+            random_state=Config.RANDOM_STATE
+        )
+        
+        # Second split: val vs test
+        idx_val, idx_test = train_test_split(
+            idx_temp,
+            test_size=0.5,
+            stratify=labels[idx_temp],
+            random_state=Config.RANDOM_STATE
+        )
+        
+        # Create masks
+        train_mask = torch.zeros(num_nodes, dtype=torch.bool)
+        val_mask = torch.zeros(num_nodes, dtype=torch.bool)
+        test_mask = torch.zeros(num_nodes, dtype=torch.bool)
+        
+        train_mask[idx_train] = True
+        val_mask[idx_val] = True
+        test_mask[idx_test] = True
+        
+        # Verify minimum sizes
+        if (sum(train_mask) < Config.MIN_TRAIN_SAMPLES or 
+            sum(val_mask) < Config.MIN_VAL_SAMPLES or
+            sum(test_mask) < Config.MIN_TEST_SAMPLES):
+            print("Insufficient samples after splitting")
             return None
             
-        indices = torch.randperm(num_nodes)
         data = Data(
             x=x,
             edge_index=edge_index,
             edge_attr=edge_attr,
             y=y,
-            train_mask=indices[:num_train],
-            val_mask=indices[num_train:num_train+num_val],
-            test_mask=indices[num_train+num_val:]
+            train_mask=train_mask,
+            val_mask=val_mask,
+            test_mask=test_mask
         )
         
         return data.to(device)

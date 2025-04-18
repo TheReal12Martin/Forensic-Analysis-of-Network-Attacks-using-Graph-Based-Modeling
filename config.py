@@ -70,12 +70,28 @@ class Config:
     MIN_TEST_SAMPLES = 100       # Minimum samples per class in test set
     MIN_VAL_ACC = 0.7
 
-    MIN_SAMPLES_PER_CLASS = 100  # Minimum samples per class to process
+    MIN_SAMPLES_PER_CLASS = 10  # Minimum samples per class to process #######################################################################
     K_NEIGHBORS = 5               # For KNN graph construction
-    MIN_SIMILARITY = 0.7    # Cosine similarity threshold
-    MIN_NEIGHBORS = 1             # Minimum neighbors for kNN
+    MIN_SIMILARITY = 0.8    # Cosine similarity threshold
+    MIN_NEIGHBORS = 2             # Minimum neighbors for kNN
     MAX_NEIGHBORS = 5
     USE_EDGE_FEATURES = True
+    OVERSAMPLE_MALICIOUS = True
+    IMBALANCE_THRESHOLD = 5.0
+
+    MAX_DUPLICATE_SIMILARITY = 0.99 # Threshold for considering duplicates
+    FORCE_CLEAN = False            # Enable aggressive cleaning
+    
+    # Augmentation parameters
+    SMOTE_ENABLED = True
+    SMOTE_K_NEIGHBORS = 3
+    MAX_AUGMENTATION_RATIO = 10.0  # Max synthetic samples per real sample
+
+    # Training Stability
+    SCHEDULER_PATIENCE = 10
+    SCHEDULER_THRESHOLD = 0.001
+    OPTIMIZE_THRESHOLD = True     # Enable threshold optimization
+    TARGET_RECALL = 0.85
     
     CLASS_NAMES = {'Benign': 0, 'Malicious': 1}
 
@@ -94,7 +110,7 @@ class Config:
     HIDDEN_CHANNELS = 128
     NUM_CLASSES = 2
     DROPOUT = 0.7
-    HEADS = 4
+    HEADS = 8
     GAT_LAYERS = 3
     
     # Training
@@ -105,7 +121,7 @@ class Config:
     WEIGHT_DECAY = 1e-4
     MIN_DELTA = 0.005
     PATIENCE = 20
-    CLASS_WEIGHTS = [1.0, 5.0]  # Higher weight for attacks
+    CLASS_WEIGHTS = [1.0, 10.0]  # Higher weight for attacks
     RANDOM_STATE = 42
     BALANCE_RATIO = 0.5  # Target ratio of benign:malicious samples
 
@@ -118,7 +134,7 @@ class Config:
     INF_REPLACEMENT = 1e12
     
     # Focal Loss Parameters
-    FOCAL_ALPHA = 0.75
+    FOCAL_ALPHA = 0.85
     FOCAL_GAMMA = 2.0
 
     CPU_THREADS = 2  # Optimal for most systems
