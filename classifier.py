@@ -8,58 +8,80 @@ import torch.cuda as cuda
 class NetworkAttackClassifier:
     def __init__(self, model_path: str, expected_features: int = 13, batch_size: int = 1024):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model = GAT(num_features=expected_features).to(self.device)
         self.batch_size = batch_size
         
-        # Enable FP16 if supported (1650 Ti has partial FP16 support)
-        if self.device.type == 'cuda' and torch.cuda.is_bf16_supported():
-            self.model = self.model.half()
+        # Initialize model
+        self.model = GAT(num_features=expected_features).to(self.device)
         
+        # Load weights
         try:
             state_dict = torch.load(model_path, map_location=self.device)
             self.model.load_state_dict(state_dict)
             self.model.eval()
-            print(f"Model loaded on {self.device} | Batch size: {batch_size} | FP16: {next(self.model.parameters()).dtype == torch.float16}")
+            print(f"Model loaded on {self.device} | Max batch size: {batch_size}")
         except Exception as e:
-            raise RuntimeError(f"Failed to load model: {str(e)}")
+            raise RuntimeError(f"Model loading failed: {str(e)}")
+        
+
 
     def classify(self, graph_data: Data) -> Dict[str, Any]:
-        """Classify nodes in batches with GPU memory checks"""
+        """Robust classification with full graph support"""
+        # Convert data if needed
         if not isinstance(graph_data.x, torch.Tensor):
-            graph_data.x = torch.tensor(graph_data.x, 
-                                      dtype=torch.float16 if self.device.type == 'cuda' else torch.float32)
+            graph_data.x = torch.tensor(graph_data.x, dtype=torch.float32)
         
-        x_batches = torch.split(graph_data.x, self.batch_size)
-        all_logits = []
+        # Move everything to device
+        graph_data = graph_data.to(self.device)
+        num_nodes = graph_data.x.size(0)
+        
+        # Prepare output tensors
+        all_logits = torch.zeros((num_nodes, 2), device='cpu')  # Assuming binary classification
         
         with torch.no_grad():
-            edge_index = graph_data.edge_index.to(self.device)
-            edge_attr = graph_data.edge_attr.to(self.device) if hasattr(graph_data, 'edge_attr') else None
-            
-            for i, batch in enumerate(x_batches):
-                batch = batch.to(self.device)
+            # Process all nodes at once if possible, otherwise use batches
+            if num_nodes <= self.batch_size or self.device.type == 'cpu':
+                # Full graph processing (works on CPU or small graphs)
+                logits = self.model(graph_data.x, graph_data.edge_index, 
+                                graph_data.edge_attr if hasattr(graph_data, 'edge_attr') else None)
+                all_logits = logits.cpu()
+            else:
+                # GPU batch processing with proper edge handling
+                edge_index = graph_data.edge_index
+                edge_attr = graph_data.edge_attr if hasattr(graph_data, 'edge_attr') else None
                 
-                # Memory check for 4GB GPUs
-                if self.device.type == 'cuda':
-                    allocated = cuda.memory_allocated(0) / 1024**3
-                    if allocated > 3.5:  # Leave 0.5GB buffer
-                        torch.cuda.empty_cache()
-                        raise RuntimeError(f"GPU memory full (allocated: {allocated:.2f}GB). Reduce --batch_size.")
-                
-                logits = self.model(batch, edge_index, edge_attr)
-                all_logits.append(logits.cpu())  # Offload to CPU immediately
-                
-                del batch  # Free GPU memory
-                if self.device.type == 'cuda':
+                for i in range(0, num_nodes, self.batch_size):
+                    batch_nodes = slice(i, min(i + self.batch_size, num_nodes))
+                    
+                    # Create subgraph for current batch
+                    batch_mask = torch.zeros(num_nodes, dtype=torch.bool)
+                    batch_mask[batch_nodes] = True
+                    
+                    # Get edges connecting nodes in this batch
+                    edge_mask = batch_mask[edge_index[0]] | batch_mask[edge_index[1]]
+                    sub_edge_index = edge_index[:, edge_mask]
+                    
+                    # Remap node indices for the subgraph
+                    node_mapping = torch.zeros(num_nodes, dtype=torch.long)
+                    node_mapping[batch_mask] = torch.arange(batch_mask.sum())
+                    sub_edge_index = node_mapping[sub_edge_index]
+                    
+                    # Process batch
+                    x_batch = graph_data.x[batch_nodes]
+                    sub_edge_attr = edge_attr[edge_mask] if edge_attr is not None else None
+                    
+                    logits = self.model(x_batch, sub_edge_index, sub_edge_attr)
+                    all_logits[batch_nodes] = logits.cpu()
+                    
+                    # Clean up
+                    del x_batch, sub_edge_index, logits
                     torch.cuda.empty_cache()
-            
-            logits = torch.cat(all_logits)
-            preds = torch.argmax(logits, dim=1)
-            probs = torch.softmax(logits, dim=1)
-            
+        
+        # Get predictions
+        preds = torch.argmax(all_logits, dim=1)
+        probs = torch.softmax(all_logits, dim=1)
+        
         return {
-            'nodes': getattr(graph_data, 'node_names', 
-                           [f"node_{i}" for i in range(graph_data.x.shape[0])]),
+            'nodes': getattr(graph_data, 'node_names', [f"node_{i}" for i in range(num_nodes)]),
             'predictions': preds.numpy(),
             'probabilities': probs.numpy()
         }

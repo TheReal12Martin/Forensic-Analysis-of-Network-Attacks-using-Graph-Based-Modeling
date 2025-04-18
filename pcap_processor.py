@@ -71,14 +71,22 @@ class PCAPProcessor:
         return self._finalize_graph()
 
     def _process_via_tshark_cli(self, pcap_path: str, max_packets: Optional[int]) -> Optional[Dict]:
-        """Faster processing using tshark CLI"""
+        """Faster processing using tshark CLI with comprehensive error handling"""
         csv_path = os.path.join(self.temp_dir, "packets.csv")
         
         cmd = [
-            'tshark', '-r', pcap_path,
+            'tshark',
+            '-r', pcap_path,
+            # Protocol handling
+            '-o', 'gui.max_tree_depth:200',        # Even higher depth for TLS
+            '--disable-protocol', 'mp2t',
+            '-o', 'tls.desegment_ssl_records:FALSE',  # Reduce memory usage
+            # Output formatting (same as above)
             '-T', 'fields',
             '-E', 'header=y',
-            '-E', 'separator=,',
+            '-E', 'separator=\t',
+            '-E', 'quote=n',
+            # Fields (same as above)
             '-e', 'ip.src',
             '-e', 'ip.dst',
             '-e', 'frame.time_epoch',
@@ -86,41 +94,77 @@ class PCAPProcessor:
             '-e', 'tcp.flags',
             '-e', 'udp.length',
             '-e', 'icmp.type',
-            '-Y', 'ip and (tcp or udp or icmp) and !dns'  # Same filter as pyshark
+            # Less restrictive filtering
+            '-Y', 'ip and (tcp or udp or icmp) and !dns',
+            # Packet limit
+            *(['-c', str(max_packets)] if max_packets else [])
         ]
-        
-        if max_packets:
-            cmd.extend(['-c', str(max_packets)])
-        
-        with open(csv_path, 'w') as f:
-            subprocess.run(cmd, stdout=f, check=True)
-        
-        # Process CSV in chunks
-        with open(csv_path) as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                self._process_csv_row(row)
-                self.packet_count += 1
+
+        try:
+            with open(csv_path, 'w') as f:
+                subprocess.run(cmd, stdout=f, check=True)
+
+            # Validate CSV structure
+            required_columns = {'ip.src', 'ip.dst', 'frame.time_epoch', 'frame.len'}
+            with open(csv_path) as f:
+                reader = csv.DictReader(f, delimiter='\t')
+                if not required_columns.issubset(reader.fieldnames):
+                    raise ValueError(f"Missing columns in TSV. Expected: {required_columns}, Got: {reader.fieldnames}")
                 
-        return self._finalize_graph()
+                for row in reader:
+                    self._process_csv_row(row)
+                    self.packet_count += 1
+            
+            return self._finalize_graph()
+        
+        except subprocess.CalledProcessError as e:
+            print(f"Tshark failed with error {e.returncode}, falling back to pyshark")
+            return self._process_via_pyshark(pcap_path, max_packets)
+
+
 
     def _process_csv_row(self, row: Dict):
-        """Process a single CSV row from tshark output"""
-        src = row.get('ip.src', '').strip()
-        dst = row.get('ip.dst', '').strip()
-        if not src or not dst:
-            return
+        """Robust CSV row processing with error handling"""
+        try:
+            # Clean and validate IPs
+            src = str(row.get('ip.src', '')).strip('\\"\' ')
+            dst = str(row.get('ip.dst', '')).strip('\\"\' ')
+            if not src or not dst or not src.replace('.', '').isdigit() or not dst.replace('.', '').isdigit():
+                return
+
+            # Safely parse numeric fields with defaults
+            try:
+                timestamp = float(row.get('frame.time_epoch', 0))
+            except (ValueError, TypeError):
+                timestamp = 0
+
+            try:
+                size = int(row.get('frame.len', 0))
+            except (ValueError, TypeError):
+                size = 0
+
+            # Handle hex/decimal flags
+            flags_str = str(row.get('tcp.flags', row.get('icmp.type', '0')))
+            try:
+                flags = int(flags_str, 16) if flags_str.startswith('0x') else int(flags_str)
+            except (ValueError, TypeError):
+                flags = 0
+
+            # Determine protocol
+            proto = 'tcp' if 'tcp.flags' in row else 'udp' if 'udp.length' in row else 'icmp'
+
+            self.flows[(src, dst, proto)].append({
+                'timestamp': timestamp,
+                'size': size,
+                'flags': flags,
+                'duration': 0
+            })
+            self._update_graph_entities(src, dst)
             
-        proto = 'tcp' if 'tcp.flags' in row else 'udp' if 'udp.length' in row else 'icmp'
-        flow_key = (src, dst, proto)
-        
-        self.flows[flow_key].append({
-            'timestamp': float(row.get('frame.time_epoch', 0)),
-            'size': int(row.get('frame.len', 0)),
-            'flags': int(row.get('tcp.flags', row.get('icmp.type', 0))),
-            'duration': 0
-        })
-        self._update_graph_entities(src, dst)
+        except Exception as e:
+            print(f"Skipping malformed packet (debug): {str(e)}")
+            print(f"Problematic row data: {row}")  # Debug output
+
 
     def _finalize_graph(self) -> Optional[Dict]:
         """Final processing steps"""
