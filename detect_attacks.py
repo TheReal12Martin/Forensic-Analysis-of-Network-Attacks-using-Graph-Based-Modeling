@@ -8,6 +8,15 @@ import psutil
 import os
 
 def main():
+    print("\n" + "="*60)
+    print("=== NETWORK ATTACK DETECTION SYSTEM ===")
+    print("="*60 + "\n")
+    
+    # Set CUDA memory configuration
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+    torch.backends.cudnn.benchmark = True
+    print("[DEBUG] CUDA memory configuration set")
+    
     parser = argparse.ArgumentParser(
         description="Network Attack Detection for Large PCAPs (Optimized for GTX 1650 Ti)")
     parser.add_argument("pcap_file", help="Path to PCAP file")
@@ -18,14 +27,34 @@ def main():
                        help="GPU batch size (default: 1024 for 4GB VRAM)")
     args = parser.parse_args()
 
+    print("[DEBUG] Parsed arguments:")
+    print(f"  PCAP file: {args.pcap_file}")
+    print(f"  Model: {args.model}")
+    print(f"  Max packets: {args.max_packets}")
+    print(f"  Batch size: {args.batch_size}")
+
+    # Initialize CUDA context
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"[DEBUG] Using device: {device}")
+    
+    if device.type == 'cuda':
+        print("[DEBUG] Initializing CUDA context...")
+        _ = torch.randn(1, device='cuda')  # Force CUDA initialization
+        print(f"[DEBUG] CUDA device: {torch.cuda.get_device_name(0)}")
+        print(f"[DEBUG] CUDA memory: {torch.cuda.get_device_properties(0).total_memory/1024**3:.2f}GB")
+    
     # Start monitoring
     start_time = time.time()
     proc = psutil.Process()
     print(f"\n🔍 Starting analysis of {os.path.basename(args.pcap_file)}")
-    print(f"System RAM: {psutil.virtual_memory().percent}% used | CPU: {psutil.cpu_percent()}%")
+    print(f"💻 System Resources:")
+    print(f"  RAM: {psutil.virtual_memory().percent}% used")
+    print(f"  CPU: {psutil.cpu_percent()}% used")
+    print(f"  Device: {device}")
 
-    # Step 1: Process PCAP
     try:
+        # Step 1: Process PCAP
+        print("\n=== PCAP PROCESSING ===")
         processor = PCAPProcessor()
         raw_graph = processor.process_pcap(args.pcap_file, args.max_packets)
 
@@ -34,31 +63,45 @@ def main():
             return
 
         # Step 2: Classify
-        print(f"\n🧠 Classifying (Batch size: {args.batch_size})")
-        classifier = NetworkAttackClassifier(args.model, batch_size=args.batch_size)
+        print("\n=== CLASSIFICATION ===")
+        print(f"[DEBUG] Initializing classifier...")
+        classifier = NetworkAttackClassifier(args.model, device=device, batch_size=args.batch_size)
+        print(f"[DEBUG] Classifying graph with {len(raw_graph['nodes'])} nodes...")
         results = classifier.classify(Data(**raw_graph))
         
-        # Output results (only attacks)
-        print("\n🔴 Detected Attacks:")
-        attack_count = 0
+        # Output results
+        print("\n🔴 DETECTED ATTACKS:")
+        attack_count = sum(results['predictions'])
         for node, pred, prob in zip(results['nodes'], results['predictions'], results['probabilities']):
             if pred == 1:
-                print(f"{node:20} -> Confidence: {prob[pred]:.2%}")
-                attack_count += 1
-        print(f"\nTotal attacks detected: {attack_count}/{len(results['nodes'])}")
+                print(f"  {node:20} -> Confidence: {prob[pred]:.2%}")
+        print(f"\n📊 Summary: {attack_count} attacks detected out of {len(results['nodes'])} nodes")
         
         # Visualization
+        print("\n=== VISUALIZATION ===")
         classifier.visualize_results(raw_graph, results)
         
     except torch.cuda.OutOfMemoryError:
-        print("❌ GPU Out of Memory! Try:")
-        print("- Reduce --batch_size (e.g., 512)")
-        print("- Lower --max_packets")
+        print("\n❌ GPU OUT OF MEMORY ERROR")
+        print("Possible solutions:")
+        print(f"  1. Reduce --batch_size (current: {args.batch_size})")
+        print(f"  2. Lower --max_packets (current: {args.max_packets})")
+        print(f"  3. Use a GPU with more memory")
     except Exception as e:
-        print(f"❌ Error: {str(e)}")
+        print(f"\n❌ ERROR: {str(e)}")
     finally:
-        print(f"\n⏱ Total time: {time.time() - start_time:.2f}s")
-        print(f"Peak RAM usage: {proc.memory_info().rss / 1024**2:.2f} MB")
+        total_time = time.time() - start_time
+        print("\n=== RESOURCE USAGE ===")
+        print(f"⏱ Total time: {total_time:.2f}s")
+        print(f"📈 Peak RAM usage: {proc.memory_info().rss / 1024**2:.2f} MB")
+        if device.type == 'cuda':
+            peak_gpu = torch.cuda.max_memory_allocated()/1024**3
+            print(f"🎮 Peak GPU memory: {peak_gpu:.2f}GB")
+        
+        print("\n" + "="*60)
+        print("=== ANALYSIS COMPLETE ===")
+        print("="*60 + "\n")
 
 if __name__ == "__main__":
+    torch.cuda.empty_cache()
     main()
