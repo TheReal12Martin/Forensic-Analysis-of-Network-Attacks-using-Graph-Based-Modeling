@@ -11,6 +11,10 @@ def main():
     print("\n" + "="*60)
     print("=== NETWORK ATTACK DETECTION SYSTEM ===")
     print("="*60 + "\n")
+
+    torch.set_num_threads(4)  # Limits CPU thread usage
+    os.environ['OMP_NUM_THREADS'] = '4'
+    os.environ['MKL_NUM_THREADS'] = '4'
     
     # Set CUDA memory configuration
     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'

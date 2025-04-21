@@ -1,5 +1,6 @@
 import tempfile
 import time
+import pandas as pd
 import pyshark
 import numpy as np
 from collections import defaultdict
@@ -9,6 +10,8 @@ from typing import Dict, Optional
 import subprocess
 import csv
 import os
+import dask.dataframe as dd
+from dask.diagnostics import ProgressBar
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -122,20 +125,20 @@ class PCAPProcessor:
         return self._finalize_graph()
 
     def _process_via_tshark_cli(self, pcap_path: str, max_packets: Optional[int]) -> Optional[Dict]:
-        """TSV processing with debug output"""
-        print(f"[DEBUG] Starting tshark CLI processing for {pcap_path}")
-        csv_path = os.path.join(self.temp_dir, "packets.csv")
-        print(f"[DEBUG] Temporary CSV path: {csv_path}")
+        """Ultimate robust tshark processing with all fixes"""
+        print(f"[DEBUG] Starting ultra-robust tshark processing for {pcap_path}")
+        csv_path = os.path.join(self.temp_dir, "packets.tsv")
         
+        # Tshark command with all known fixes
         cmd = [
             'tshark',
             '-r', pcap_path,
             '-o', 'gui.max_tree_depth:200',
-            '--disable-protocol', 'mp2t',
+            '--disable-protocol', 'mp2t',  # Only disable protocols that definitely exist
             '-T', 'fields',
             '-E', 'header=y',
-            '-E', 'separator=,',
-            '-E', 'quote=n',
+            '-E', 'separator=\t',
+            '-E', 'occurrence=f',
             '-e', 'ip.src',
             '-e', 'ip.dst',
             '-e', 'frame.time_epoch',
@@ -147,37 +150,66 @@ class PCAPProcessor:
             *(['-c', str(max_packets)] if max_packets else [])
         ]
 
-        print(f"[DEBUG] Executing command: {' '.join(cmd)}")
+        print(f"[DEBUG] Executing: {' '.join(cmd)}")
+        
         try:
-            with open(csv_path, 'w') as f:
-                subprocess.run(cmd, stdout=f, check=True)
-
-            file_size = os.path.getsize(csv_path)/1024
-            print(f"[DEBUG] CSV file created (size: {file_size:.2f} KB)")
+            # Run with full error capture
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
             
-            with open(csv_path) as f:
-                reader = csv.DictReader(f)
-                print(f"[DEBUG] CSV headers: {reader.fieldnames}")
-                
-                for i, row in enumerate(reader):
-                    if max_packets and self.packet_count >= max_packets:
-                        print(f"[DEBUG] Reached max packets limit at {self.packet_count}")
-                        break
+            # Write output to file
+            with open(csv_path, 'w') as f:
+                f.write(result.stdout)
+            
+            # Process output line by line
+            line_count = 0
+            reader = csv.DictReader(
+                result.stdout.splitlines(),
+                delimiter='\t',
+                fieldnames=[
+                    'ip.src', 'ip.dst', 'frame.time_epoch',
+                    'frame.len', 'tcp.flags', 'udp.length', 'icmp.type'
+                ]
+            )
+            
+            for row in reader:
+                if max_packets and self.packet_count >= max_packets:
+                    break
                     
-                    if i % 100000 == 0:
-                        print(f"[DEBUG] Processing packet {i}...")
-                        if self.device.type == 'cuda':
-                            torch.cuda.empty_cache()
-                    
+                try:
                     self._process_csv_row(row)
                     self.packet_count += 1
-            
-            print(f"[DEBUG] Processed {self.packet_count} packets total")
+                    line_count += 1
+                    
+                    if line_count % 100000 == 0:
+                        print(f"[DEBUG] Processed {line_count} packets...")
+                        if self.device.type == 'cuda':
+                            torch.cuda.empty_cache()
+                            
+                except Exception as e:
+                    print(f"⚠️ Packet {line_count} error: {str(e)}")
+                    continue
+                    
+            print(f"[DEBUG] Successfully processed {self.packet_count} packets")
             return True
-        
+            
         except subprocess.CalledProcessError as e:
-            print(f"[ERROR] Tshark failed with return code {e.returncode}")
-            raise Exception(f"Tshark failed with error {e.returncode}")
+            print(f"❌ Tshark failed (code {e.returncode})")
+            print(f"Stderr: {e.stderr[:500]}...")  # Print first 500 chars of error
+            raise Exception("Tshark processing failed")
+
+    def _process_dask_partition(self, df_partition):
+        """Helper for Dask parallel processing"""
+        count = 0
+        for _, row in df_partition.iterrows():
+            self._process_csv_row(row.to_dict())
+            count += 1
+        return pd.DataFrame({'count': [count]})
 
     def _process_csv_row(self, row: Dict):
         """Row processing with detailed debug"""
@@ -255,7 +287,7 @@ class PCAPProcessor:
                 print(f"Problematic row data: {dict((k,v) for k,v in row.items() if v)}")
 
     def _finalize_graph(self) -> Optional[Dict]:
-        """Graph finalization with debug info"""
+        """Graph finalization with optimized feature calculation"""
         print("\n[DEBUG] Finalizing graph data...")
         print(f"[DEBUG] Current stats - Flows: {len(self.flows)}, Nodes: {len(self.node_features)}, Edges: {len(self.edge_connections)}")
         
@@ -265,44 +297,59 @@ class PCAPProcessor:
             print("[ERROR] No valid nodes found in PCAP")
             return None
             
-        num_nodes = len(self.node_features)
-        print(f"[DEBUG] Creating feature matrix for {num_nodes} nodes")
+        # Pre-calculate all flow statistics
+        flow_stats = {}
+        for flow_key, packets in self.flows.items():
+            sizes = [p['size'] for p in packets]
+            durations = [p['duration'] for p in packets]
+            flags = [p['flags'] for p in packets]
+            
+            flow_stats[flow_key] = {
+                'sizes': sizes,
+                'durations': durations,
+                'flags': flags,
+                'count': len(packets)
+            }
         
-        features = np.zeros((num_nodes, 13), dtype=np.float32)
+        # Vectorized feature calculation
         node_names = list(self.node_features.keys())
+        features = np.zeros((len(node_names), 13), dtype=np.float32)
         
         for i, node in enumerate(node_names):
-            relevant = [(f, p) for f in self.flows for p in self.flows[f] if node in f[:2]]
-            if not relevant:
+            # Get all flows involving this node
+            relevant_flows = [stats for flow, stats in flow_stats.items() if node in flow[:2]]
+            
+            if not relevant_flows:
                 continue
                 
-            sizes = [p['size'] for _, p in relevant]
-            durations = [p['duration'] for _, p in relevant]
-            flags = [p['flags'] for _, p in relevant]
+            # Concatenate all values
+            all_sizes = np.concatenate([f['sizes'] for f in relevant_flows])
+            all_durations = np.concatenate([f['durations'] for f in relevant_flows])
+            all_flags = np.concatenate([f['flags'] for f in relevant_flows])
             
             features[i] = [
                 self.node_features[node]['connections'],
-                len({f for f, _ in relevant}),
+                len(relevant_flows),
                 1 if self.node_features[node]['type'] == 'host' else 0,
                 time.time() - self.node_features[node]['first_seen'],
-                len(sizes),
-                np.mean(sizes) if sizes else 0,
-                np.std(sizes) if sizes else 0,
-                np.mean(durations) if durations else 0,
-                np.std(durations) if durations else 0,
-                len(flags),
-                np.mean(flags) if flags else 0,
-                np.std(flags) if flags else 0,
-                int(any(f > 0 for f in flags))
+                len(all_sizes),
+                np.mean(all_sizes) if all_sizes.size else 0,
+                np.std(all_sizes) if all_sizes.size else 0,
+                np.mean(all_durations) if all_durations.size else 0,
+                np.std(all_durations) if all_durations.size else 0,
+                len(all_flags),
+                np.mean(all_flags) if all_flags.size else 0,
+                np.std(all_flags) if all_flags.size else 0,
+                int(any(f > 0 for f in all_flags))
             ]
-        
+            
             if i < 3:  # Debug print for first 3 nodes
                 print(f"[DEBUG] Sample node {i}: {node}")
                 print(f"  connections: {features[i][0]}")
                 print(f"  mean size: {features[i][5]:.2f}")
                 print(f"  mean duration: {features[i][7]:.2f}")
 
-        # Build edge connections
+        # Build edge connections (unchanged from original)
         if self.edge_connections:
             print(f"[DEBUG] Creating {len(self.edge_connections)} edges")
             edge_index = np.array([
@@ -327,7 +374,7 @@ class PCAPProcessor:
             'x': torch.as_tensor(features, dtype=dtype),
             'edge_index': torch.as_tensor(edge_index, dtype=torch.long),
             'edge_attr': torch.as_tensor(edge_attr, dtype=dtype),
-            'y': torch.zeros(num_nodes, dtype=torch.long)
+            'y': torch.zeros(len(node_names), dtype=torch.long)
         }
         
         self._print_summary()

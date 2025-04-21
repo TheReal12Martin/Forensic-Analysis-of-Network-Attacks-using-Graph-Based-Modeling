@@ -84,36 +84,55 @@ class NetworkAttackClassifier:
         }
 
     def _batch_inference(self, graph_data: Data, batch_size: int) -> torch.Tensor:
-        """Process large graphs in batches"""
+        """Memory-optimized batch processing"""
         print(f"\n=== BATCH PROCESSING ===")
         print(f"[DEBUG] Starting batch inference with size {batch_size}")
+        
+        # Move all data to CPU for preprocessing
+        edge_index = graph_data.edge_index.cpu().numpy()
+        x_numpy = graph_data.x.cpu().numpy()
+        edge_attr_numpy = graph_data.edge_attr.cpu().numpy() if hasattr(graph_data, 'edge_attr') else None
+        
         all_logits = []
-        edge_index = graph_data.edge_index
         
         for i in range(0, graph_data.num_nodes, batch_size):
-            # Print progress every 10%
-            if i % max(1, graph_data.num_nodes//10) == 0:
-                if self.device.type == 'cuda':
-                    mem = torch.cuda.memory_allocated()/1024**3
-                    print(f"[DEBUG] Processing batch {i}/{graph_data.num_nodes} | GPU Mem: {mem:.2f}GB")
-                else:
-                    print(f"[DEBUG] Processing batch {i}/{graph_data.num_nodes}")
+            batch_end = min(i + batch_size, graph_data.num_nodes)
             
-            # Create batch subgraph
-            batch_nodes = slice(i, min(i + batch_size, graph_data.num_nodes))
-            edge_mask = (edge_index[0] >= i) & (edge_index[0] < i + batch_size)
+            # Find edges for this batch (CPU operation)
+            mask = (edge_index[0] >= i) & (edge_index[0] < batch_end)
+            batch_edge_index = edge_index[:, mask] - i  # Adjust indices
             
+            # Create batch on CPU first
+            batch_x = torch.as_tensor(x_numpy[i:batch_end], dtype=torch.float16)
+            batch_edge_index = torch.as_tensor(batch_edge_index, dtype=torch.long)
+            
+            if edge_attr_numpy is not None:
+                batch_edge_attr = torch.as_tensor(edge_attr_numpy[mask], dtype=torch.float16)
+            else:
+                batch_edge_attr = None
+            
+            # Move to GPU just before processing
             batch = Data(
-                x=graph_data.x[batch_nodes],
-                edge_index=edge_index[:, edge_mask],
-                edge_attr=graph_data.edge_attr[edge_mask] if hasattr(graph_data, 'edge_attr') else None
+                x=batch_x.to(self.device),
+                edge_index=batch_edge_index.to(self.device),
+                edge_attr=batch_edge_attr.to(self.device) if batch_edge_attr is not None else None
             )
             
-            # Process batch
+            # Process with automatic mixed precision
             with torch.amp.autocast(device_type='cuda', enabled=self.device.type == 'cuda'):
                 batch_logits = self.model(batch.x, batch.edge_index, batch.edge_attr)
             
+            # Immediately move back to CPU and clean up
             all_logits.append(batch_logits.cpu())
+            del batch, batch_logits
+            
+            # Print progress every 10%
+            if (i // batch_size) % max(1, (graph_data.num_nodes // batch_size) // 10) == 0:
+                if self.device.type == 'cuda':
+                    mem = torch.cuda.memory_allocated()/1024**3
+                    print(f"[DEBUG] Processed {i}/{graph_data.num_nodes} | GPU Mem: {mem:.2f}GB")
+                else:
+                    print(f"[DEBUG] Processed {i}/{graph_data.num_nodes}")
             
             if self.device.type == 'cuda':
                 torch.cuda.empty_cache()
