@@ -83,7 +83,12 @@ def main():
         
         # Visualization
         print("\n=== VISUALIZATION ===")
-        classifier.visualize_results(raw_graph, results)
+        #classifier.visualize_results(raw_graph, results)
+        # After getting results from classifier
+        classifier.save_for_d3(raw_graph, results, "data/graph.json")
+        print("First 20 lines of generated file:")
+        with open("data/graph.json", 'r') as f:
+            print(''.join(f.readlines()[:20]))
         
     except torch.cuda.OutOfMemoryError:
         print("\n❌ GPU OUT OF MEMORY ERROR")

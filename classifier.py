@@ -1,3 +1,4 @@
+import json
 import torch
 from torch_geometric.data import Data
 from models.GAT import GAT
@@ -175,3 +176,112 @@ class NetworkAttackClassifier:
             print(f"✅ Visualization saved to {output_file}")
         except Exception as e:
             print(f"❌ Visualization failed: {str(e)}")
+
+
+
+    def save_results(self, raw_graph: Dict, results: Dict, output_file: str = "results.json"):
+        """Save classification results to JSON file"""
+        data_to_save = {
+            'nodes': results['nodes'],
+            'predictions': results['predictions'].tolist() if isinstance(results['predictions'], np.ndarray) else results['predictions'],
+            'probabilities': results['probabilities'].tolist() if isinstance(results['probabilities'], np.ndarray) else results['probabilities'],
+            'edge_index': raw_graph['edge_index'].tolist() if isinstance(raw_graph['edge_index'], torch.Tensor) else raw_graph['edge_index']
+        }
+        
+        with open(output_file, 'w') as f:
+            json.dump(data_to_save, f)
+        
+        print(f"Results saved to {output_file}")
+
+
+    def save_for_d3(self, raw_graph: Dict, results: Dict, output_file: str = "data/graph.json") -> None:
+        """
+        Ultra-robust JSON saver that:
+        1. Handles NaN/Infinity values
+        2. Validates all data types
+        3. Uses atomic writes
+        """
+        import json
+        import math
+        import numpy as np
+        from pathlib import Path
+
+        class SafeJSONEncoder(json.JSONEncoder):
+            def encode(self, obj):
+                return super().encode(self._clean(obj))
+
+            def _clean(self, obj):
+                if isinstance(obj, (float, np.floating)):
+                    if math.isnan(obj) or math.isinf(obj):
+                        return 0.0  # Replace NaN/Inf with 0
+                    return obj
+                elif isinstance(obj, (np.generic, np.ndarray)):
+                    return self._clean(obj.item() if obj.size == 1 else obj.tolist())
+                elif isinstance(obj, dict):
+                    return {k: self._clean(v) for k, v in obj.items()}
+                elif isinstance(obj, (list, tuple)):
+                    return [self._clean(x) for x in obj]
+                return obj
+
+        # --- Input Validation ---
+        try:
+            if not all(k in results for k in ('nodes', 'predictions', 'probabilities')):
+                raise ValueError("Missing required keys in results")
+
+            # --- Build Nodes ---
+            nodes = []
+            for i, (node_id, pred, prob) in enumerate(zip(
+                results['nodes'],
+                results['predictions'],
+                results['probabilities']
+            )):
+                try:
+                    confidence = float(prob[int(pred)])
+                    if math.isnan(confidence):
+                        confidence = 0.0  # Replace NaN
+                    
+                    nodes.append({
+                        "id": str(node_id),
+                        "group": int(bool(pred)),
+                        "confidence": confidence
+                    })
+                except Exception as e:
+                    raise ValueError(f"Invalid node data at index {i}: {str(e)}") from e
+
+            # --- Build Links ---
+            links = []
+            edge_index = raw_graph.get('edge_index', [[], []])
+            for src_idx, dst_idx in zip(edge_index[0], edge_index[1]):
+                try:
+                    if src_idx < len(nodes) and dst_idx < len(nodes):
+                        links.append({
+                            "source": str(results['nodes'][src_idx]),
+                            "target": str(results['nodes'][dst_idx])
+                        })
+                except Exception as e:
+                    raise ValueError(f"Invalid edge data: {str(e)}") from e
+
+            # --- Atomic Write ---
+            Path(output_file).parent.mkdir(parents=True, exist_ok=True)
+            temp_file = f"{output_file}.tmp"
+            
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(
+                    {"nodes": nodes, "links": links},
+                    f,
+                    cls=SafeJSONEncoder,
+                    indent=2,
+                    ensure_ascii=False
+                )
+            
+            # Validate the file
+            with open(temp_file, 'r', encoding='utf-8') as f:
+                json.load(f)  # Test parse
+            
+            Path(temp_file).replace(output_file)
+            print(f"✅ Saved validated graph to {output_file}")
+
+        except Exception as e:
+            if 'temp_file' in locals():
+                Path(temp_file).unlink(missing_ok=True)
+            raise RuntimeError(f"Failed to save graph: {str(e)}") from e
