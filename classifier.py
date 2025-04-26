@@ -1,3 +1,4 @@
+import json
 import torch
 from torch_geometric.data import Data
 from models.GAT import GAT
