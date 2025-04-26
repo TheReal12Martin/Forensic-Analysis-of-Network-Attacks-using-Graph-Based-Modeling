@@ -83,7 +83,7 @@ def main():
         
         # Visualization
         print("\n=== VISUALIZATION ===")
-        classifier.visualize_results(raw_graph, results)
+        classifier.save_for_d3(raw_graph, results, "data/graph.json")
         
     except torch.cuda.OutOfMemoryError:
         print("\n❌ GPU OUT OF MEMORY ERROR")

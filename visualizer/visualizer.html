@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Network Attack Visualization</title>
+  <link rel="icon" href="data:,"> <!-- Disable favicon requests -->
+  <script src="https://unpkg.com/3d-force-graph"></script>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    #graph-container { width: 100vw; height: 100vh; }
+    #status {
+      position: absolute; 
+      top: 10px; 
+      left: 10px;
+      background: rgba(0,0,0,0.7);
+      color: white;
+      padding: 10px;
+      border-radius: 5px;
+      font-family: Arial;
+    }
+  </style>
+</head>
+<body>
+  <div id="graph-container"></div>
+  <div id="status">Loading...</div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const container = document.getElementById('graph-container');
+
+    async function loadData() {
+      statusEl.textContent = "Loading graph data...";
+      
+      try {
+        const response = await fetch('../data/graph.json');
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        
+        const data = await response.json();
+        if (!data.nodes || !data.links) throw new Error("Invalid graph structure");
+        
+        statusEl.textContent = `Loaded ${data.nodes.length} nodes, ${data.links.length} links`;
+        return data;
+      } catch (e) {
+        statusEl.textContent = `Error: ${e.message}`;
+        throw e;
+      }
+    }
+
+    function initGraph(data) {
+      statusEl.textContent = "Rendering...";
+      
+      const Graph = ForceGraph3D()(container)
+        .graphData(data)
+        .nodeLabel(node => `${node.id} (${node.group ? 'ATTACK' : 'Normal'})`)
+        .nodeColor(node => node.group ? '#ff0000' : '#00aa00')
+        .onEngineStop(() => {
+          statusEl.textContent += " | Done!";
+        });
+      
+      // Adjust camera
+      Graph.cameraPosition({ z: 500 });
+    }
+
+    // Start everything
+    loadData()
+      .then(initGraph)
+      .catch(e => console.error("Fatal error:", e));
+  </script>
+</body>
+</html>

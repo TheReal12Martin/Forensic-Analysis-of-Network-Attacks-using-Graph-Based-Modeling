@@ -140,38 +140,94 @@ class NetworkAttackClassifier:
         print("[DEBUG] Batch processing complete")
         return torch.cat(all_logits).to(self.device)
 
-    def visualize_results(self, raw_graph: Dict, results: Dict, output_file: str = "attack_graph.html"):
-        """Visualization with debug info"""
-        print("\n=== VISUALIZATION ===")
-        print(f"[DEBUG] Output file: {output_file}")
-        print(f"[DEBUG] Nodes to visualize: {len(results['nodes'])}")
-        
+    def save_for_d3(self, raw_graph: Dict, results: Dict, output_file: str = "data/graph.json") -> None:
+        """
+        Ultra-robust JSON saver that:
+        1. Handles NaN/Infinity values
+        2. Validates all data types
+        3. Uses atomic writes
+        """
+        import json
+        import math
+        import numpy as np
+        from pathlib import Path
+
+        class SafeJSONEncoder(json.JSONEncoder):
+            def encode(self, obj):
+                return super().encode(self._clean(obj))
+
+            def _clean(self, obj):
+                if isinstance(obj, (float, np.floating)):
+                    if math.isnan(obj) or math.isinf(obj):
+                        return 0.0  # Replace NaN/Inf with 0
+                    return obj
+                elif isinstance(obj, (np.generic, np.ndarray)):
+                    return self._clean(obj.item() if obj.size == 1 else obj.tolist())
+                elif isinstance(obj, dict):
+                    return {k: self._clean(v) for k, v in obj.items()}
+                elif isinstance(obj, (list, tuple)):
+                    return [self._clean(x) for x in obj]
+                return obj
+
+        # --- Input Validation ---
         try:
-            import networkx as nx
-            from pyvis.network import Network
-            
-            G = nx.Graph()
-            attack_count = sum(results['predictions'])
-            print(f"[DEBUG] Creating graph with {attack_count} attack nodes")
-            
-            for i, node in enumerate(results['nodes']):
-                G.add_node(
-                    node,
-                    label=f"{node}\nStatus: {'ATTACK' if results['predictions'][i] else 'Normal'}",
-                    color='red' if results['predictions'][i] else 'green',
-                    title=f"Confidence: {results['probabilities'][i][results['predictions'][i]]:.2%}"
+            if not all(k in results for k in ('nodes', 'predictions', 'probabilities')):
+                raise ValueError("Missing required keys in results")
+
+            # --- Build Nodes ---
+            nodes = []
+            for i, (node_id, pred, prob) in enumerate(zip(
+                results['nodes'],
+                results['predictions'],
+                results['probabilities']
+            )):
+                try:
+                    confidence = float(prob[int(pred)])
+                    if math.isnan(confidence):
+                        confidence = 0.0  # Replace NaN
+
+                    nodes.append({
+                        "id": str(node_id),
+                        "group": int(bool(pred)),
+                        "confidence": confidence
+                    })
+                except Exception as e:
+                    raise ValueError(f"Invalid node data at index {i}: {str(e)}") from e
+
+            # --- Build Links ---
+            links = []
+            edge_index = raw_graph.get('edge_index', [[], []])
+            for src_idx, dst_idx in zip(edge_index[0], edge_index[1]):
+                try:
+                    if src_idx < len(nodes) and dst_idx < len(nodes):
+                        links.append({
+                            "source": str(results['nodes'][src_idx]),
+                            "target": str(results['nodes'][dst_idx])
+                        })
+                except Exception as e:
+                    raise ValueError(f"Invalid edge data: {str(e)}") from e
+
+            # --- Atomic Write ---
+            Path(output_file).parent.mkdir(parents=True, exist_ok=True)
+            temp_file = f"{output_file}.tmp"
+
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(
+                    {"nodes": nodes, "links": links},
+                    f,
+                    cls=SafeJSONEncoder,
+                    indent=2,
+                    ensure_ascii=False
                 )
-            
-            if 'edge_index' in raw_graph:
-                edge_index = raw_graph['edge_index'].cpu() if isinstance(raw_graph['edge_index'], torch.Tensor) else raw_graph['edge_index']
-                print(f"[DEBUG] Adding {edge_index.shape[1]} edges")
-                for src, dst in zip(edge_index[0], edge_index[1]):
-                    if src < len(results['nodes']) and dst < len(results['nodes']):
-                        G.add_edge(results['nodes'][src], results['nodes'][dst])
-            
-            net = Network(height="750px", width="100%", notebook=False)
-            net.from_nx(G)
-            net.save_graph(output_file)
-            print(f"✅ Visualization saved to {output_file}")
+
+            # Validate the file
+            with open(temp_file, 'r', encoding='utf-8') as f:
+                json.load(f)  # Test parse
+
+            Path(temp_file).replace(output_file)
+            print(f"✅ Saved validated graph to {output_file}")
+
         except Exception as e:
-            print(f"❌ Visualization failed: {str(e)}")
+            if 'temp_file' in locals():
+                Path(temp_file).unlink(missing_ok=True)
+            raise RuntimeError(f"Failed to save graph: {str(e)}") from e
