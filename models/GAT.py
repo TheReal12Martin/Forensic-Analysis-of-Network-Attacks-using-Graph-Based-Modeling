@@ -6,60 +6,58 @@ from torch_geometric.nn import GATConv
 from config import Config
 
 class GAT(nn.Module):
-    def __init__(self, num_features, hidden_channels=256, heads=4, num_layers=3, dropout=0.5):
+    def __init__(self, num_features, hidden_channels=128, heads=4, num_layers=3, dropout=0.3):
         super().__init__()
         self.dropout = dropout
         
-        # Residual connections
+        # ===== NEW ARCHITECTURE COMPONENTS =====
+        # Input normalization
+        self.input_norm = nn.BatchNorm1d(num_features)
+        
+        # GAT layers
         self.convs = nn.ModuleList()
-        self.bns = nn.ModuleList()
-        self.skip = nn.ModuleList()
-        
-        # Input layer
         self.convs.append(GATConv(num_features, hidden_channels, heads=heads, dropout=dropout))
-        self.bns.append(nn.BatchNorm1d(hidden_channels * heads))
-        self.skip.append(nn.Linear(num_features, hidden_channels * heads))
         
-        # Hidden layers
         for _ in range(num_layers - 2):
             self.convs.append(GATConv(
-                hidden_channels * heads, 
-                hidden_channels, 
-                heads=heads, 
+                hidden_channels * heads,
+                hidden_channels,
+                heads=heads,
                 dropout=dropout
             ))
-            self.bns.append(nn.BatchNorm1d(hidden_channels * heads))
-            self.skip.append(nn.Linear(hidden_channels * heads, hidden_channels * heads))
         
-        # Output layer
+        # Output layer with controlled scale
         self.convs.append(GATConv(
-            hidden_channels * heads, 
+            hidden_channels * heads,
             2,  # num_classes
-            heads=6, 
+            heads=1,  # Single head for output
             concat=False,
             dropout=dropout
         ))
         
-        # Edge importance weighting
-        self.edge_encoder = nn.Linear(1, heads)
-        
+        # Learnable temperature parameter
+        self.temperature = nn.Parameter(torch.tensor(0.5))
+
+        self.temperature_min = 0.1
+        self.temperature_max = 2.0
+        # ===== END NEW ARCHITECTURE =====
+
     def forward(self, x, edge_index, edge_attr=None):
-        # Edge attention boosting
-        if edge_attr is not None:
-            edge_attr = self.edge_encoder(edge_attr.view(-1, 1))
+        # ===== NEW FORWARD PASS =====
+        # Normalize input features
+        x = self.input_norm(x)
         
-        # Forward pass with residuals
-        for i, conv in enumerate(self.convs[:-1]):
-            x_res = self.skip[i](x)
+        # Forward pass through GAT layers
+        for conv in self.convs[:-1]:
+            x = F.leaky_relu(conv(x, edge_index, edge_attr=edge_attr))
             x = F.dropout(x, p=self.dropout, training=self.training)
-            x = conv(x, edge_index, edge_attr=edge_attr) + x_res
-            x = self.bns[i](x)
-            x = F.elu(x)
         
-        x = F.dropout(x, p=self.dropout, training=self.training)
+        # Final layer with controlled output scale
         x = self.convs[-1](x, edge_index, edge_attr=edge_attr)
+        clamped_temp = torch.clamp(self.temperature, self.temperature_min, self.temperature_max)
+        x = x / (clamped_temp + 1e-8)
         
-        return F.log_softmax(x, dim=1)
+        return x  # Return raw logits
     
     def visualize_attention(self, edge_index, node_idx=None):
         """Visualize attention patterns"""

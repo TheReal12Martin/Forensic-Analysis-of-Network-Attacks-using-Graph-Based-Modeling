@@ -17,11 +17,28 @@
       border-radius: 5px;
       font-family: Arial;
     }
+    #legend {
+      position: absolute;
+      bottom: 20px;
+      left: 10px;
+      background: rgba(0,0,0,0.7);
+      color: white;
+      padding: 10px;
+      border-radius: 5px;
+      font-family: Arial;
+    }
   </style>
 </head>
 <body>
   <div id="graph-container"></div>
   <div id="status">Loading...</div>
+  <div id="legend">
+    <div><span style="color:green">■</span> Normal (High Confidence)</div>
+    <div><span style="color:lightgreen">■</span> Normal (Low Confidence)</div>
+    <div><span style="color:red">■</span> Attack (High Confidence)</div>
+    <div><span style="color:orange">■</span> Attack (Low Confidence)</div>
+    <div><span style="color:yellow">■</span> Very Low Confidence (≤0.5)</div>
+  </div>
 
   <script>
     const statusEl = document.getElementById('status');
@@ -37,7 +54,9 @@
         const data = await response.json();
         if (!data.nodes || !data.links) throw new Error("Invalid graph structure");
         
-        statusEl.textContent = `Loaded ${data.nodes.length} nodes, ${data.links.length} links`;
+        // Add confidence analysis
+        const lowConfNodes = data.nodes.filter(n => n.confidence <= 0.5).length;
+        statusEl.textContent = `Loaded ${data.nodes.length} nodes (${lowConfNodes} low-confidence), ${data.links.length} links`;
         return data;
       } catch (e) {
         statusEl.textContent = `Error: ${e.message}`;
@@ -50,14 +69,40 @@
       
       const Graph = ForceGraph3D()(container)
         .graphData(data)
-        .nodeLabel(node => `${node.id} (${node.group ? 'ATTACK' : 'Normal'})`)
-        .nodeColor(node => node.group ? '#ff0000' : '#00aa00')
+        .nodeLabel(node => {
+          const type = node.group ? 'ATTACK' : 'Normal';
+          const conf = (node.confidence * 100).toFixed(1);
+          return `${node.id}\nType: ${type}\nConfidence: ${conf}%`;
+        })
+        .nodeColor(node => {
+          // Very low confidence (<= 0.5)
+          if (node.confidence <= 0.5) return 'yellow';
+          
+          // Normal nodes
+          if (!node.group) {
+            return node.confidence < 0.7 ? 'lightgreen' : 'green';
+          }
+          // Attack nodes
+          else {
+            return node.confidence < 0.9 ? 'orange' : 'red';
+          }
+        })
+        .nodeOpacity(0.9)
+        .linkColor(() => 'rgba(200, 200, 200, 0.2)')
+        .onNodeHover(node => {
+          container.style.cursor = node ? 'pointer' : null;
+        })
         .onEngineStop(() => {
           statusEl.textContent += " | Done!";
         });
       
       // Adjust camera
       Graph.cameraPosition({ z: 500 });
+      
+      // Add hover info
+      Graph.onNodeClick(node => {
+        alert(`Node: ${node.id}\nType: ${node.group ? 'ATTACK' : 'Normal'}\nConfidence: ${(node.confidence * 100).toFixed(1)}%`);
+      });
     }
 
     // Start everything

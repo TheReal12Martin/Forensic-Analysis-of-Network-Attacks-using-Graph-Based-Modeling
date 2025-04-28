@@ -127,9 +127,13 @@ class Config:
     WEIGHT_DECAY = 1e-4
     MIN_DELTA = 0.005
     PATIENCE = 20
-    CLASS_WEIGHTS = [1.0, 15.0]  # Higher weight for attacks
+    CLASS_WEIGHTS = [1.0, 2.5]  # Higher weight for attacks
     RANDOM_STATE = 42
     BALANCE_RATIO = 0.5  # Target ratio of benign:malicious samples
+    GLOBAL_BEST_ACC = 0
+    GLOBAL_BEST_STATE = None
+    GLOBAL_BEST_METRICS = None
+    GLOBAL_BEST_PARTITION = None
 
     MIN_TRAIN_SAMPLES = 6         # Minimum training samples
     MIN_VAL_SAMPLES = 3           # Minimum validation samples
