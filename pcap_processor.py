@@ -66,6 +66,21 @@ class PCAPProcessor:
                 print("[DEBUG] Starting pyshark fallback processing...")
                 result = self._process_via_pyshark(pcap_path, max_packets)
                 print("[DEBUG] pyshark processing completed")
+
+            # Print feature statistics for the first 5 nodes
+            print("\n[DEBUG] Feature Verification:")
+            for i, (node, feats) in enumerate(list(self.node_features.items())[:5]):
+                print(f"Node {i}: {node}")
+                print(f"  Connections: {feats['connections']}")
+                print(f"  First seen: {feats['first_seen']}")
+                print(f"  Type: {feats['type']}")
+
+            # Print sample flow stats
+            sample_flow = next(iter(self.flows.values()))
+            print("\n[DEBUG] Sample Flow Stats:")
+            print(f"  Packet count: {len(sample_flow)}")
+            print(f"  Avg size: {np.mean([p['size'] for p in sample_flow]):.2f}")
+            print(f"  Avg duration: {np.mean([p['duration'] for p in sample_flow]):.2f}")
             
             if result:
                 print("[DEBUG] Finalizing graph...")
@@ -214,6 +229,10 @@ class PCAPProcessor:
     def _process_csv_row(self, row: Dict):
         """Row processing with detailed debug"""
         try:
+
+            if row.get('ip.src') == 'ip.src' or row.get('ip.dst') == 'ip.dst':
+                return
+
             if not isinstance(row, dict):
                 print(f"[WARN] Row is not a dictionary: {type(row)}")
                 return
@@ -287,98 +306,118 @@ class PCAPProcessor:
                 print(f"Problematic row data: {dict((k,v) for k,v in row.items() if v)}")
 
     def _finalize_graph(self) -> Optional[Dict]:
-        """Graph finalization with optimized feature calculation"""
+        """Complete updated graph finalization with robust feature engineering"""
         print("\n[DEBUG] Finalizing graph data...")
-        print(f"[DEBUG] Current stats - Flows: {len(self.flows)}, Nodes: {len(self.node_features)}, Edges: {len(self.edge_connections)}")
-        
-        self._calculate_flow_stats()
-        
-        if not self.node_features:
-            print("[ERROR] No valid nodes found in PCAP")
-            return None
+        try:
+            # --- Node Feature Construction ---
+            node_names = list(self.node_features.keys())
+            features = np.zeros((len(node_names), 13), dtype=np.float32)
             
-        # Pre-calculate all flow statistics
-        flow_stats = {}
-        for flow_key, packets in self.flows.items():
-            sizes = [p['size'] for p in packets]
-            durations = [p['duration'] for p in packets]
-            flags = [p['flags'] for p in packets]
-            
-            flow_stats[flow_key] = {
-                'sizes': sizes,
-                'durations': durations,
-                'flags': flags,
-                'count': len(packets)
-            }
-        
-        # Vectorized feature calculation
-        node_names = list(self.node_features.keys())
-        features = np.zeros((len(node_names), 13), dtype=np.float32)
-        
-        for i, node in enumerate(node_names):
-            # Get all flows involving this node
-            relevant_flows = [stats for flow, stats in flow_stats.items() if node in flow[:2]]
-            
-            if not relevant_flows:
-                continue
-                
-            # Concatenate all values
-            all_sizes = np.concatenate([f['sizes'] for f in relevant_flows])
-            all_durations = np.concatenate([f['durations'] for f in relevant_flows])
-            all_flags = np.concatenate([f['flags'] for f in relevant_flows])
-            
-            features[i] = [
-                self.node_features[node]['connections'],
-                len(relevant_flows),
-                1 if self.node_features[node]['type'] == 'host' else 0,
-                time.time() - self.node_features[node]['first_seen'],
-                len(all_sizes),
-                np.mean(all_sizes) if all_sizes.size else 0,
-                np.std(all_sizes) if all_sizes.size else 0,
-                np.mean(all_durations) if all_durations.size else 0,
-                np.std(all_durations) if all_durations.size else 0,
-                len(all_flags),
-                np.mean(all_flags) if all_flags.size else 0,
-                np.std(all_flags) if all_flags.size else 0,
-                int(any(f > 0 for f in all_flags))
-            ]
-            
-            if i < 3:  # Debug print for first 3 nodes
-                print(f"[DEBUG] Sample node {i}: {node}")
-                print(f"  connections: {features[i][0]}")
-                print(f"  mean size: {features[i][5]:.2f}")
-                print(f"  mean duration: {features[i][7]:.2f}")
+            # Calculate global stats for normalization
+            all_connections = [n['connections'] for n in self.node_features.values()]
+            global_conn_mean = np.mean(all_connections) if all_connections else 1
+            global_conn_std = np.std(all_connections) if all_connections else 1
 
-        # Build edge connections (unchanged from original)
-        if self.edge_connections:
-            print(f"[DEBUG] Creating {len(self.edge_connections)} edges")
-            edge_index = np.array([
-                [node_names.index(src), node_names.index(dst)]
-                for src, dst in self.edge_connections
-            ]).T
-            edge_attr = np.array([
-                sum(1 for f in self.flows if (src in f[:2] and dst in f[:2]))
-                for src, dst in self.edge_connections
-            ], dtype=np.float32)
-        else:
-            print("[DEBUG] No edges found, creating placeholder")
-            edge_index = np.array([[0], [0]], dtype=np.int64)
-            edge_attr = np.array([0.0], dtype=np.float32)
-        
-        # Use mixed precision for GPU
-        dtype = torch.float16 if self.device.type == 'cuda' else torch.float32
-        print(f"[DEBUG] Using dtype: {dtype}")
-        
-        graph_data = {
-            'nodes': node_names,
-            'x': torch.as_tensor(features, dtype=dtype),
-            'edge_index': torch.as_tensor(edge_index, dtype=torch.long),
-            'edge_attr': torch.as_tensor(edge_attr, dtype=dtype),
-            'y': torch.zeros(len(node_names), dtype=torch.long)
-        }
-        
-        self._print_summary()
-        return graph_data
+            for i, (node, node_data) in enumerate(self.node_features.items()):
+                # Get all flows for this node (safe access)
+                relevant_flows = []
+                for flow_key, packets in self.flows.items():
+                    if node in flow_key[:2]:
+                        sizes = [p.get('size', 0) for p in packets]
+                        durations = [p.get('duration', 0) for p in packets]
+                        flags = [p.get('flags', 0) for p in packets]
+                        relevant_flows.append({
+                            'sizes': sizes,
+                            'durations': durations,
+                            'flags': flags,
+                            'count': len(packets)
+                        })
+
+                # Concatenate all values with empty array fallback
+                sizes = np.concatenate([f['sizes'] for f in relevant_flows]) if relevant_flows else np.array([0])
+                durations = np.concatenate([f['durations'] for f in relevant_flows]) if relevant_flows else np.array([0])
+                flags = np.concatenate([f['flags'] for f in relevant_flows]) if relevant_flows else np.array([0])
+
+                # --- New Feature Engineering ---
+                features[i] = [
+                    # 1. Log-normalized connection count
+                    np.log1p(node_data['connections']) / 15.0,
+                    
+                    # 2. Log flow count
+                    np.log1p(len(relevant_flows)) / 10.0,
+                    
+                    # 3. Binary host indicator (unchanged)
+                    1.0 if node_data.get('type') == 'host' else 0.0,
+                    
+                    # 4. Hours since first seen (sigmoid normalized)
+                    1 / (1 + np.exp(-(time.time() - node_data.get('first_seen', time.time())) / 3600)),
+                    
+                    # 5-7. Packet size stats
+                    np.log1p(np.mean(sizes)) / 15.0,
+                    np.log1p(np.std(sizes)) / 10.0 if len(sizes) > 1 else 0.0,
+                    np.mean(sizes > 1500),  # Jumbo frame ratio
+                    
+                    # 8-10. Duration stats
+                    np.log1p(np.mean(durations)) / 10.0,
+                    np.log1p(np.std(durations)) / 10.0 if len(durations) > 1 else 0.0,
+                    np.mean(durations > 1),  # Long connection ratio
+                    
+                    # 11-13. Flag stats
+                    np.log1p(np.sum(flags)) / 10.0,
+                    np.log1p(np.std(flags)) / 5.0 if len(flags) > 1 else 0.0,
+                    min(np.sum([f in {0x12, 0x29, 3, 8} for f in flags]) / 10.0, 1.0)
+                ]
+
+            # --- Edge Construction (unchanged from previous) ---
+            edge_index = []
+            edge_attr = []
+            node_to_idx = {name: idx for idx, name in enumerate(node_names)}
+            
+            for src, dst in self.edge_connections:
+                try:
+                    src_idx = node_to_idx[src]
+                    dst_idx = node_to_idx[dst]
+                    edge_index.append([src_idx, dst_idx])
+                    flow_count = sum(1 for flow in self.flows if src in flow[:2] and dst in flow[:2])
+                    edge_attr.append(np.log1p(flow_count))
+                except KeyError:
+                    continue
+
+            # Convert to tensors
+            edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+            edge_attr = torch.tensor(edge_attr, dtype=torch.float32)
+            
+            # Final validation and clipping
+            features = np.nan_to_num(features, nan=0.0)
+            features = np.clip(features, 0.0, 1.0)  # Hard clip to [0,1] range
+            
+            print("\n[DEBUG] Final Feature Statistics:")
+            print(f"Min: {np.min(features):.4f}, Max: {np.max(features):.4f}")
+            print(f"Mean: {np.mean(features):.4f}")
+            print("Sample Node Features:", features[0])
+
+            return {
+                'nodes': node_names,
+                'x': torch.as_tensor(features, dtype=torch.float32),
+                'edge_index': edge_index,
+                'edge_attr': edge_attr,
+                'y': torch.zeros(len(node_names), dtype=torch.long)
+            }
+
+        except Exception as e:
+            print(f"❌ Graph finalization failed: {str(e)}")
+            return None
+    
+    def _safe_numeric_conversion(self, value, default=0.0):
+        """Robust numeric conversion with error handling"""
+        try:
+            if isinstance(value, str):
+                value = value.strip('"\'\\ ')
+                if value.lower() in ('', 'nan', 'inf', '-inf'):
+                    return default
+            return float(value)
+        except (ValueError, TypeError):
+            return default
 
     def _process_packet(self, pkt):
         """Original pyshark packet processor with debug"""
@@ -436,16 +475,16 @@ class PCAPProcessor:
             self.edge_connections.add(edge_key)
 
     def _calculate_flow_stats(self):
-        """Flow calculator with debug"""
-        print("[DEBUG] Calculating flow statistics...")
         for flow_key, packets in self.flows.items():
-            if len(packets) > 1:
-                timestamps = [p['timestamp'] for p in packets if 'timestamp' in p]
-                if timestamps:
-                    flow_duration = max(timestamps) - min(timestamps)
-                    for p in packets:
-                        p['duration'] = flow_duration
-        print("[DEBUG] Flow stats calculated")
+            try:
+                if len(packets) > 1:
+                    timestamps = [p.get('timestamp', 0) for p in packets]
+                    if timestamps:
+                        flow_duration = max(timestamps) - min(timestamps)
+                        for p in packets:
+                            p['duration'] = flow_duration if flow_duration >= 0 else 0
+            except:
+                continue
 
     def _print_summary(self):
         """Enhanced summary with GPU info"""

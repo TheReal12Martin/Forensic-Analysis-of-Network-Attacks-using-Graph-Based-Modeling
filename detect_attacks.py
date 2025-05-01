@@ -65,6 +65,17 @@ def main():
         if not raw_graph or len(raw_graph['nodes']) < 2:
             print("❌ Not enough nodes for analysis")
             return
+        
+        # After processor.process_pcap()
+        if raw_graph is None:
+            print("❌ Failed to create graph from PCAP")
+            return
+
+        # Explicit dimension check
+        if raw_graph['x'].shape[1] != 13:
+            print(f"❌ Invalid feature dimension: {raw_graph['x'].shape[1]}")
+            return
+
 
         # Step 2: Classify
         print("\n=== CLASSIFICATION ===")

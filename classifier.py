@@ -27,62 +27,141 @@ class NetworkAttackClassifier:
         # Load weights with security protection
         try:
             print("[DEBUG] Loading model weights...")
-            state_dict = torch.load(model_path, map_location=self.device, weights_only=True)
+            checkpoint = torch.load(model_path, map_location=self.device, weights_only=True)
+            
+            # Handle different save formats
+            if 'state_dict' in checkpoint:
+                state_dict = checkpoint['state_dict']
+            else:
+                state_dict = checkpoint
+            
+            # Handle DataParallel wrapped models
+            state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+            
             self.model.load_state_dict(state_dict)
             self.model.eval()
             print(f"✅ Model loaded on {self.device} | Batch: {batch_size}")
-            if self.device.type == 'cuda':
-                mem = torch.cuda.memory_allocated()/1024**3
-                print(f"[DEBUG] GPU Memory Allocated: {mem:.2f}GB")
         except Exception as e:
             print(f"❌ Model loading failed: {str(e)}")
             raise RuntimeError(f"Model loading failed: {str(e)}")
+        
+        self._verify_model_weights()
+
+    def _verify_model_weights(self):
+        """New method to check model weights"""
+        print("\n=== MODEL WEIGHT VERIFICATION ===")
+        for name, param in self.model.named_parameters():
+            if 'weight' in name:
+                print(f"{name}: mean={param.data.mean().item():.4f}, std={param.data.std().item():.4f}")
+                if 'lin' in name and param.dim() == 2:
+                    print("Feature weights for attack class:")
+                    print(param.data[1].cpu().numpy())
 
     def classify(self, graph_data: Data) -> Dict[str, Any]:
-        """Optimized classification with memory management"""
+        """Complete updated classification with dynamic scaling"""
         print("\n=== STARTING CLASSIFICATION ===")
-        print(f"[DEBUG] Input graph nodes: {graph_data.num_nodes}")
-        print(f"[DEBUG] Input graph edges: {graph_data.edge_index.shape[1]}")
         
-        # Ensure data is on correct device
-        if not isinstance(graph_data.x, torch.Tensor):
-            dtype = torch.float16 if self.device.type == 'cuda' else torch.float32
-            print(f"[DEBUG] Converting features to {dtype} tensor")
-            graph_data.x = torch.tensor(graph_data.x, dtype=dtype).to(self.device)
+        # --- Input Validation (unchanged) ---
+        if graph_data is None or not hasattr(graph_data, 'x'):
+            return {'nodes': [], 'predictions': [], 'probabilities': []}
+            
+        # --- Feature Scaling ---
+        graph_data.x = graph_data.x * 2.0 - 1.0  # Scale [0,1] -> [-1,1]
         
-        graph_data = graph_data.to(self.device)
-        num_nodes = graph_data.x.size(0)
-        print(f"[DEBUG] Processing {num_nodes} nodes")
-        
-        # Adjust batch size based on available memory
-        safe_batch = min(self.batch_size, num_nodes)
-        if self.device.type == 'cuda':
-            safe_batch = min(safe_batch, 2048)
-            print(f"[DEBUG] Adjusted batch size: {safe_batch} (original: {self.batch_size})")
-        
+        # --- Model Inference ---
         with torch.no_grad(), torch.amp.autocast(device_type='cuda', enabled=self.device.type == 'cuda'):
-            # Full graph inference if possible
             try:
-                print("[DEBUG] Attempting full graph inference...")
-                logits = self.model(graph_data.x, graph_data.edge_index, 
-                                 graph_data.edge_attr if hasattr(graph_data, 'edge_attr') else None)
-                print("[DEBUG] Full graph inference successful")
-            except RuntimeError as e:
-                print(f"[DEBUG] Full graph failed, falling back to batches: {str(e)}")
-                logits = self._batch_inference(graph_data, safe_batch)
+                logits = self.model(graph_data.x, graph_data.edge_index,
+                                  graph_data.edge_attr if hasattr(graph_data, 'edge_attr') else None)
+                
+                # Dynamic temperature scaling
+                logit_range = logits.max() - logits.min()
+                temperature = max(5.0, logit_range.item() / 2.0)
+                scaled_probs = torch.softmax(logits / temperature, dim=1)
+                
+                print("\n[DEBUG] Model Output:")
+                print(f"Temperature: {temperature:.2f}")
+                print(f"Logits - Benign: {logits[:,0].mean().item():.2f} ± {logits[:,0].std().item():.2f}")
+                print(f"Logits - Attack: {logits[:,1].mean().item():.2f} ± {logits[:,1].std().item():.2f}")
+                
+            except Exception as e:
+                print(f"❌ Inference failed: {str(e)}")
+                return {'nodes': [], 'predictions': [], 'probabilities': []}
+
+        # --- Adaptive Thresholding ---
+        attack_probs = scaled_probs[:, 1].cpu().numpy()
+        threshold = max(0.1, np.percentile(attack_probs, 99))  # Minimum 10% threshold
         
-        probs = torch.softmax(logits, dim=1).cpu().numpy()
-        preds = torch.argmax(logits, dim=1).cpu().numpy()
+        # --- Ground Truth Analysis ---
+        malicious_ips = ["192.168.10.5", "192.168.10.15"]  # Add your known malicious IPs
+        print("\n[DEBUG] Known Malicious Nodes:")
+        for i, node in enumerate(graph_data.nodes):
+            if node in malicious_ips:
+                print(f"{node}:")
+                print(f"  Features: {graph_data.x[i].cpu().numpy()}")
+                print(f"  Probabilities: {scaled_probs[i].cpu().numpy()}")
         
-        print("[DEBUG] Classification complete")
-        print(f"[DEBUG] Predictions shape: {preds.shape}")
-        print(f"[DEBUG] Probabilities shape: {probs.shape}")
+        # --- Final Predictions ---
+        preds = (attack_probs > threshold).astype(int)
+        attack_indices = np.where(preds == 1)[0]
+        
+        print(f"\n🔴 Detected {len(attack_indices)} potential attacks (threshold={threshold:.2f})")
+        print(f"Attack Probability Range: {attack_probs.min():.4f}-{attack_probs.max():.4f}")
+        
+        # Fallback analysis if no attacks detected
+        if len(attack_indices) == 0:
+            suspicious = np.argsort(attack_probs)[-5:][::-1]  # Top 5 most suspicious
+            print("\n⚠️ Top Suspicious Nodes:")
+            for idx in suspicious:
+                print(f"{graph_data.nodes[idx]}: {attack_probs[idx]:.2%}")
         
         return {
-            'nodes': getattr(graph_data, 'node_names', [f"node_{i}" for i in range(num_nodes)]),
+            'nodes': graph_data.nodes,
             'predictions': preds,
-            'probabilities': probs
+            'probabilities': scaled_probs.cpu().numpy()
         }
+    
+    def verify_model(self, graph_data: Data):
+        """Verify model responds to synthetic attacks"""
+        print("\n=== MODEL VERIFICATION ===")
+        
+        # Create synthetic attack features
+        benign_node = graph_data.x[0].clone()
+        attack_node = graph_data.x[0].clone()
+        
+        # Modify features that should indicate attack
+        attack_features = {
+            0: 1000,   # High connection count
+            4: 1500,   # Large mean packet size
+            10: 50,     # Many flags
+            11: 20,     # High flag variation
+            12: 1.0     # Suspicious flag ratio
+        }
+        
+        for idx, val in attack_features.items():
+            attack_node[idx] = val
+        
+        # Create test data
+        test_data = Data(
+            x=torch.stack([benign_node, attack_node]),
+            edge_index=torch.tensor([[0,1], [1,0]]).t(),
+            edge_attr=torch.tensor([1.0, 1.0])
+        )
+        
+        # Run inference
+        with torch.no_grad():
+            logits = self.model(test_data.x, test_data.edge_index, test_data.edge_attr)
+            probs = torch.softmax(logits, dim=1)
+        
+        print("\n[TEST] Benign Node:")
+        print(f"Features: {benign_node.tolist()}")
+        print(f"Probabilities: {probs[0].tolist()}")
+        
+        print("\n[TEST] Attack Node:")
+        print(f"Features: {attack_node.tolist()}")
+        print(f"Probabilities: {probs[1].tolist()}")
+        
+        return probs[1][1].item() > 0.5  # Returns True if attack detected
 
     def _batch_inference(self, graph_data: Data, batch_size: int) -> torch.Tensor:
         """Memory-optimized batch processing"""
