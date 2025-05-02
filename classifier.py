@@ -90,16 +90,7 @@ class NetworkAttackClassifier:
 
         # --- Adaptive Thresholding ---
         attack_probs = scaled_probs[:, 1].cpu().numpy()
-        threshold = max(0.1, np.percentile(attack_probs, 99))  # Minimum 10% threshold
-        
-        # --- Ground Truth Analysis ---
-        malicious_ips = ["192.168.10.5", "192.168.10.15"]  # Add your known malicious IPs
-        print("\n[DEBUG] Known Malicious Nodes:")
-        for i, node in enumerate(graph_data.nodes):
-            if node in malicious_ips:
-                print(f"{node}:")
-                print(f"  Features: {graph_data.x[i].cpu().numpy()}")
-                print(f"  Probabilities: {scaled_probs[i].cpu().numpy()}")
+        threshold = max(0.6, np.percentile(attack_probs, 99))  # Increase minimum threshold
         
         # --- Final Predictions ---
         preds = (attack_probs > threshold).astype(int)
