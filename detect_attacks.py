@@ -87,9 +87,22 @@ def main():
         # Output results
         print("\n🔴 DETECTED ATTACKS:")
         attack_count = sum(results['predictions'])
-        for node, pred, prob in zip(results['nodes'], results['predictions'], results['probabilities']):
-            if pred == 1:
-                print(f"  {node:20} -> Confidence: {prob[pred]:.2%}")
+        if attack_count > 0:
+            # Sort by confidence (descending) and format consistently
+            attack_nodes = sorted(
+                [(node, pred, prob) for node, pred, prob in 
+                zip(results['nodes'], results['predictions'], results['probabilities']) 
+                if pred == 1],
+                key=lambda x: x[2][1],  # Sort by attack class probability
+                reverse=True
+            )
+            
+            for node, pred, prob in attack_nodes:
+                confidence = prob[pred] * 100  # Get the probability of the predicted class
+                print(f"  {node:20} -> Confidence: {confidence:.2f}%")
+        else:
+            print("  No attacks detected with current threshold")
+            
         print(f"\n📊 Summary: {attack_count} attacks detected out of {len(results['nodes'])} nodes")
         
         # Visualization

@@ -227,76 +227,59 @@ class PCAPProcessor:
         return pd.DataFrame({'count': [count]})
 
     def _process_csv_row(self, row: Dict):
-        """Row processing with detailed debug"""
+        """Row processing with enhanced feature extraction"""
         try:
-
             if row.get('ip.src') == 'ip.src' or row.get('ip.dst') == 'ip.dst':
-                return
-
-            if not isinstance(row, dict):
-                print(f"[WARN] Row is not a dictionary: {type(row)}")
                 return
 
             src = str(row.get('ip.src', '')).strip('"\'\\ ')
             dst = str(row.get('ip.dst', '')).strip('"\'\\ ')
             
             if not src or not dst:
-                print(f"[WARN] Missing IPs in row: src={src}, dst={dst}")
                 return
 
-            # Debug print first packet and every 100,000th packet
-            if self.packet_count == 0 or self.packet_count % 100000 == 0:
-                print(f"[DEBUG] Sample packet {self.packet_count}:")
-                print(f"  src: {src}, dst: {dst}")
-                print(f"  timestamp: {row.get('frame.time_epoch')}")
-                print(f"  size: {row.get('frame.len')}")
-                print(f"  flags: {row.get('tcp.flags')}")
+            # Enhanced timestamp handling
+            timestamp_str = str(row.get('frame.time_epoch', '0')).strip('"\'\\ ')
+            timestamp = float(timestamp_str) if timestamp_str.replace('.', '', 1).isdigit() else 0.0
 
-            # Safely parse numeric fields
-            try:
-                timestamp_str = str(row.get('frame.time_epoch', '0')).strip('"\'\\ ')
-                timestamp = float(timestamp_str) if timestamp_str.replace('.', '', 1).isdigit() else 0.0
-            except (ValueError, TypeError) as e:
-                print(f"⚠️ Timestamp conversion error: {str(e)}")
-                timestamp = 0.0
+            # Enhanced size handling
+            size_str = str(row.get('frame.len', '0')).strip('"\'\\ ')
+            size = int(float(size_str)) if size_str.replace('.', '', 1).isdigit() else 0
 
-            try:
-                size_str = str(row.get('frame.len', '0')).strip('"\'\\ ')
-                size = int(float(size_str)) if size_str.replace('.', '', 1).isdigit() else 0
-            except (ValueError, TypeError) as e:
-                print(f"⚠️ Size conversion error: {str(e)}")
-                size = 0
-
-            # Protocol and flag detection
-            proto = 'unknown'
-            flags = 0
+            # Enhanced protocol and flag detection
+            flags = {
+                'tcp': 0,
+                'icmp_type': 0,
+                'icmp_code': 0,
+                'udp': 0,
+                'proto': 'unknown'
+            }
             
-            # Check TCP flags first
             tcp_flags = str(row.get('tcp.flags', '')).strip('"\'\\ ')
             if tcp_flags:
                 try:
-                    flags = int(tcp_flags, 16) if tcp_flags.startswith('0x') else int(tcp_flags)
-                    proto = 'tcp'
+                    flags['tcp'] = int(tcp_flags, 16) if tcp_flags.startswith('0x') else int(tcp_flags)
+                    flags['proto'] = 'tcp'
                 except (ValueError, TypeError):
                     pass
-            # Fallback to ICMP type
             elif 'icmp.type' in row:
                 try:
-                    flags = int(str(row['icmp.type']).strip('"\'\\ '))
-                    proto = 'icmp'
+                    flags['icmp_type'] = int(str(row['icmp.type']).strip('"\'\\ '))
+                    flags['icmp_code'] = int(str(row.get('icmp.code', '0')).strip('"\'\\ '))
+                    flags['proto'] = 'icmp'
                 except (ValueError, TypeError):
                     pass
-            # Final fallback to UDP
             elif 'udp.length' in row:
-                proto = 'udp'
+                flags['proto'] = 'udp'
+                flags['udp'] = 1
 
-            # Store the flow data
-            flow_key = (src, dst, proto)
+            # Store the enhanced flow data
+            flow_key = (src, dst, flags['proto'])
             self.flows[flow_key].append({
                 'timestamp': timestamp,
                 'size': size,
-                'flags': flags,
-                'duration': 0
+                'flags': flags,  # Now stores dictionary of flags
+                'duration': 0   # Will be updated in _calculate_flow_stats()
             })
             self._update_graph_entities(src, dst)
             
@@ -307,68 +290,91 @@ class PCAPProcessor:
 
     def _finalize_graph(self) -> Optional[Dict]:
         """Complete updated graph finalization with robust feature engineering"""
-        print("\n[DEBUG] Finalizing graph data...")
+        print("\n[DEBUG] Finalizing graph data with enhanced features...")
         try:
             # --- Node Feature Construction ---
             node_names = list(self.node_features.keys())
-            features = np.zeros((len(node_names), 13), dtype=np.float32)
+            num_features = 13  # Changed to match model's expected_features
+            features = np.zeros((len(node_names), num_features), dtype=np.float32)
             
-            # Calculate global stats for normalization
-            all_connections = [n['connections'] for n in self.node_features.values()]
-            global_conn_mean = np.mean(all_connections) if all_connections else 1
-            global_conn_std = np.std(all_connections) if all_connections else 1
+            # First calculate all flow stats
+            self._calculate_flow_stats()
 
             for i, (node, node_data) in enumerate(self.node_features.items()):
-                # Get all flows for this node (safe access)
+                # Get all flows for this node
                 relevant_flows = []
                 for flow_key, packets in self.flows.items():
                     if node in flow_key[:2]:
                         sizes = [p.get('size', 0) for p in packets]
                         durations = [p.get('duration', 0) for p in packets]
-                        flags = [p.get('flags', 0) for p in packets]
+                        flag_objects = [p.get('flags', {}) for p in packets]
                         relevant_flows.append({
                             'sizes': sizes,
                             'durations': durations,
-                            'flags': flags,
-                            'count': len(packets)
+                            'flags': flag_objects,
+                            'count': len(packets),
+                            'timestamps': [p.get('timestamp', 0) for p in packets],
+                            'proto': packets[0].get('flags', {}).get('proto', 'unknown') if packets else 'unknown'
                         })
 
-                # Concatenate all values with empty array fallback
-                sizes = np.concatenate([f['sizes'] for f in relevant_flows]) if relevant_flows else np.array([0])
-                durations = np.concatenate([f['durations'] for f in relevant_flows]) if relevant_flows else np.array([0])
-                flags = np.concatenate([f['flags'] for f in relevant_flows]) if relevant_flows else np.array([0])
+                # Extract timing features
+                all_timestamps = [ts for f in relevant_flows for ts in f['timestamps']]
+                if all_timestamps:
+                    time_range = max(all_timestamps) - min(all_timestamps)
+                    packet_rate = len(all_timestamps) / time_range if time_range > 0 else 0
+                else:
+                    time_range = 1
+                    packet_rate = 0
 
-                # --- New Feature Engineering ---
+                # Extract flag statistics
+                tcp_flags = [f.get('tcp', 0) for flist in [f['flags'] for f in relevant_flows] for f in flist if isinstance(f, dict)]
+                syn_ratio = np.mean([1 for f in tcp_flags if f & 0x02]) if tcp_flags else 0
+                rst_ratio = np.mean([1 for f in tcp_flags if f & 0x04]) if tcp_flags else 0
+                ack_ratio = np.mean([1 for f in tcp_flags if f & 0x10]) if tcp_flags else 0
+
+                # Extract size statistics
+                sizes = np.concatenate([f['sizes'] for f in relevant_flows]) if relevant_flows else np.array([0])
+                small_pkt_ratio = np.mean(sizes < 60) if len(sizes) > 0 else 0
+                large_pkt_ratio = np.mean(sizes > 1500) if len(sizes) > 0 else 0
+
+                # Protocol distribution
+                proto_counts = {
+                    'tcp': sum(1 for f in relevant_flows if f['proto'] == 'tcp'),
+                    'udp': sum(1 for f in relevant_flows if f['proto'] == 'udp'),
+                    'icmp': sum(1 for f in relevant_flows if f['proto'] == 'icmp')
+                }
+                total_flows = max(1, len(relevant_flows))
+                
+                # --- Feature Engineering (13 features exactly) ---
                 features[i] = [
-                    # 1. Log-normalized connection count
-                    np.log1p(node_data['connections']) / 15.0,
-                    
-                    # 2. Log flow count
-                    np.log1p(len(relevant_flows)) / 10.0,
-                    
-                    # 3. Binary host indicator (unchanged)
+                    # 1. Basic features (3) - unchanged
+                    np.log1p(node_data['connections']) / 10.0,
+                    np.log1p(len(relevant_flows)) / 8.0,
                     1.0 if node_data.get('type') == 'host' else 0.0,
                     
-                    # 4. Hours since first seen (sigmoid normalized)
-                    1 / (1 + np.exp(-(time.time() - node_data.get('first_seen', time.time())) / 3600)),
+                    # 2. Timing features (2) - added epsilon for stability
+                    np.log1p(max(packet_rate, 1e-6)) / 10.0,  # Prevents log(0)
+                    min(1.0, np.log1p(time_range + 1e-6) / 12.0),
                     
-                    # 5-7. Packet size stats
-                    np.log1p(np.mean(sizes)) / 15.0,
-                    np.log1p(np.std(sizes)) / 10.0 if len(sizes) > 1 else 0.0,
-                    np.mean(sizes > 1500),  # Jumbo frame ratio
+                    # 3. Size features (3) - normalized and clipped
+                    np.clip(np.log1p(np.mean(sizes)) / 12.0, 0, 1),
+                    np.clip(np.log1p(np.std(sizes)) / 10.0 if len(sizes) > 1 else 0.0, 0, 1),
+                    np.clip(small_pkt_ratio, 0, 1),  # Removed large_pkt_ratio
                     
-                    # 8-10. Duration stats
-                    np.log1p(np.mean(durations)) / 10.0,
-                    np.log1p(np.std(durations)) / 10.0 if len(durations) > 1 else 0.0,
-                    np.mean(durations > 1),  # Long connection ratio
+                    # 4. Flag features (3) - added interaction terms
+                    syn_ratio,
+                    rst_ratio,
+                    min(1.0, ack_ratio + syn_ratio),  # Combined ACK+SYN pattern
                     
-                    # 11-13. Flag stats
-                    np.log1p(np.sum(flags)) / 10.0,
-                    np.log1p(np.std(flags)) / 5.0 if len(flags) > 1 else 0.0,
-                    min(np.sum([f in {0x12, 0x29, 3, 8} for f in flags]) / 10.0, 1.0)
+                    # 5. Protocol mix (2) - unchanged ratios
+                    proto_counts['tcp'] / total_flows,
+                    proto_counts['udp'] / total_flows
                 ]
 
-            # --- Edge Construction (unchanged from previous) ---
+                # Validation check
+                assert len(features[i]) == 13, f"Feature count mismatch: {len(features[i])} != 13"
+
+            # --- Edge Construction ---
             edge_index = []
             edge_attr = []
             node_to_idx = {name: idx for idx, name in enumerate(node_names)}
@@ -379,7 +385,7 @@ class PCAPProcessor:
                     dst_idx = node_to_idx[dst]
                     edge_index.append([src_idx, dst_idx])
                     flow_count = sum(1 for flow in self.flows if src in flow[:2] and dst in flow[:2])
-                    edge_attr.append(np.log1p(flow_count))
+                    edge_attr.append(np.log1p(flow_count + 1))
                 except KeyError:
                     continue
 
@@ -389,12 +395,17 @@ class PCAPProcessor:
             
             # Final validation and clipping
             features = np.nan_to_num(features, nan=0.0)
-            features = np.clip(features, 0.0, 1.0)  # Hard clip to [0,1] range
-            
+            features = np.clip(features, 0.0, 1.0)
+
             print("\n[DEBUG] Final Feature Statistics:")
             print(f"Min: {np.min(features):.4f}, Max: {np.max(features):.4f}")
             print(f"Mean: {np.mean(features):.4f}")
-            print("Sample Node Features:", features[0])
+            print(f"Feature dimension: {features.shape[1]}")
+            print("Sample Node Features:", features[0] if len(features) > 0 else "No features")
+
+            if len(node_names) < 2:
+                print("❌ Not enough nodes for analysis (need at least 2)")
+                return None
 
             return {
                 'nodes': node_names,
@@ -406,6 +417,8 @@ class PCAPProcessor:
 
         except Exception as e:
             print(f"❌ Graph finalization failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _safe_numeric_conversion(self, value, default=0.0):
@@ -420,52 +433,66 @@ class PCAPProcessor:
             return default
 
     def _process_packet(self, pkt):
-        """Original pyshark packet processor with debug"""
+        """Enhanced pyshark packet processor"""
         try:
             if not hasattr(pkt, 'ip'):
-                print("[DEBUG] Skipping non-IP packet")
                 return
                 
             src = str(pkt.ip.src)
             dst = str(pkt.ip.dst)
             
-            proto = next(
-                (p for p in ['tcp', 'udp', 'icmp'] if hasattr(pkt, p)),
-                None
-            )
-            
+            # Get enhanced flags
+            flags = self._get_enhanced_flags(pkt)
+            proto = flags['proto']
+
             if proto:
                 flow_key = (src, dst, proto)
                 features = {
                     'timestamp': float(getattr(pkt, 'sniff_timestamp', 0)),
                     'size': int(getattr(pkt, 'length', 0)),
-                    'flags': self._get_flags(pkt),
-                    'duration': 0
+                    'flags': flags,  # Using enhanced flag dictionary
+                    'duration': 0   # Will be updated later
                 }
                 self.flows[flow_key].append(features)
                 self._update_graph_entities(src, dst)
         except Exception as e:
             print(f"[DEBUG] Error processing packet: {str(e)}")
 
-    def _get_flags(self, pkt) -> int:
-        """Flag extractor with debug"""
+    def _get_enhanced_flags(self, pkt) -> dict:
+        """Comprehensive flag extraction for all protocols"""
+        flags = {
+            'tcp': 0,
+            'icmp_type': 0,
+            'icmp_code': 0,
+            'udp': 0,
+            'proto': 'unknown'
+        }
+        
         try:
             if hasattr(pkt, 'tcp') and hasattr(pkt.tcp, 'flags'):
-                return int(pkt.tcp.flags, 16)
-            elif hasattr(pkt, 'icmp') and hasattr(pkt.icmp, 'type'):
-                return int(pkt.icmp.type)
-            return 0
+                flags['tcp'] = int(pkt.tcp.flags, 16) if pkt.tcp.flags.startswith('0x') else int(pkt.tcp.flags)
+                flags['proto'] = 'tcp'
+            elif hasattr(pkt, 'icmp'):
+                flags['icmp_type'] = int(getattr(pkt.icmp, 'type', 0))
+                flags['icmp_code'] = int(getattr(pkt.icmp, 'code', 0))
+                flags['proto'] = 'icmp'
+            elif hasattr(pkt, 'udp'):
+                flags['udp'] = 1
+                flags['proto'] = 'udp'
         except Exception as e:
             print(f"[DEBUG] Flag extraction error: {str(e)}")
-            return 0
+        
+        return flags
 
     def _update_graph_entities(self, src: str, dst: str):
-        """Graph updater with debug"""
+        """Enhanced graph updater with type detection"""
         for node in [src, dst]:
             if node not in self.node_features:
+                # Detect if external IP (simple heuristic)
+                is_external = not node.startswith(('192.168.', '10.', '172.16.'))
                 self.node_features[node] = {
                     'connections': 0,
-                    'type': 'host',
+                    'type': 'external' if is_external else 'internal',
                     'first_seen': time.time()
                 }
             self.node_features[node]['connections'] += 1
@@ -475,6 +502,7 @@ class PCAPProcessor:
             self.edge_connections.add(edge_key)
 
     def _calculate_flow_stats(self):
+        """Calculate accurate flow durations and other temporal statistics"""
         for flow_key, packets in self.flows.items():
             try:
                 if len(packets) > 1:
@@ -483,7 +511,8 @@ class PCAPProcessor:
                         flow_duration = max(timestamps) - min(timestamps)
                         for p in packets:
                             p['duration'] = flow_duration if flow_duration >= 0 else 0
-            except:
+            except Exception as e:
+                print(f"⚠️ Error calculating flow stats: {str(e)}")
                 continue
 
     def _print_summary(self):

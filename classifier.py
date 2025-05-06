@@ -89,7 +89,7 @@ class NetworkAttackClassifier:
                 return {'nodes': [], 'predictions': [], 'probabilities': []}
 
         # --- Adaptive Thresholding ---
-        attack_probs = scaled_probs[:, 1].cpu().numpy()
+        attack_probs = 1 - scaled_probs[:, 1].cpu().numpy()
         threshold = max(0.6, np.percentile(attack_probs, 99))  # Increase minimum threshold
         
         # --- Final Predictions ---
