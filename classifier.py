@@ -95,6 +95,11 @@ class NetworkAttackClassifier:
         # --- Final Predictions ---
         preds = (attack_probs > threshold).astype(int)
         attack_indices = np.where(preds == 1)[0]
+        adjusted_probs = np.where(
+            preds[:, None] == 1,  # Check if prediction is attack
+            1 - scaled_probs.cpu().numpy(),  # Invert probabilities for attacks
+            scaled_probs.cpu().numpy()       # Keep original for benign
+        )
         
         print(f"\n🔴 Detected {len(attack_indices)} potential attacks (threshold={threshold:.2f})")
         print(f"Attack Probability Range: {attack_probs.min():.4f}-{attack_probs.max():.4f}")
@@ -109,7 +114,7 @@ class NetworkAttackClassifier:
         return {
             'nodes': graph_data.nodes,
             'predictions': preds,
-            'probabilities': scaled_probs.cpu().numpy()
+            'probabilities': adjusted_probs
         }
     
     def verify_model(self, graph_data: Data):
