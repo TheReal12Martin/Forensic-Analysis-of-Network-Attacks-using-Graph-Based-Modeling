@@ -84,12 +84,25 @@ progress {
 }
 
 #graph-container {
-    width: 100%;
-    height: 600px;
+    position: relative;
+    overflow: hidden;
     background: white;
-    border-radius: 8px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-}
+    contain: strict; /* Isolates rendering */
+  }
+  
+  #graph-container > div {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+  }
+  
+  canvas {
+    display: block !important;
+    position: absolute !important;
+  }
+
 
 #results-summary {
     background: white;
@@ -97,4 +110,22 @@ progress {
     border-radius: 8px;
     box-shadow: 0 2px 10px rgba(0,0,0,0.1);
     margin-top: 20px;
+}
+
+#packet-controls {
+    background: #f8f8f8;
+    padding: 10px;
+    border-radius: 4px;
+    margin: 15px 0;
+}
+
+#packet-controls label {
+    margin-right: 10px;
+    font-weight: bold;
+}
+
+#max-packets {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 5px 10px;
 }
