@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Attack Detection System</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://unpkg.com/3d-force-graph"></script>
+    <script src="/static/script.js" defer></script>
+</head>
+<body>
+    <div id="app-container">
+        <div id="header">
+            <h1>Network Attack Detection System</h1>
+        </div>
+        
+        <div id="upload-section">
+            <h2>Upload PCAP File</h2>
+            <label for="file-input" class="upload-btn">Choose PCAP File</label>
+            <input type="file" id="file-input" accept=".pcap,.pcapng">
+            <div id="file-info">No file selected</div>
+            <button id="process-btn" class="process-btn" disabled>Analyze</button>
+            <div class="progress-container">
+                <progress id="progress-bar" value="0" max="100"></progress>
+                <div id="progress-text">Ready</div>
+            </div>
+        </div>
+        
+        <div id="graph-container"></div>
+        <div id="results-summary"></div>
+    </div>
+</body>
+</html>

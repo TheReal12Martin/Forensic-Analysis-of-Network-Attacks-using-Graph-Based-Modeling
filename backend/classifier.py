@@ -1,6 +1,9 @@
 import json
 import torch
 from torch_geometric.data import Data
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
 from models.GAT import GAT
 from typing import Dict, Any
 import numpy as np
