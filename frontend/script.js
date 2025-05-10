@@ -17,6 +17,14 @@ document.addEventListener('DOMContentLoaded', () => {
   fileInput.addEventListener('change', handleFileSelect);
   processBtn.addEventListener('click', processPcapFile);
 
+  document.getElementById('max-packets').addEventListener('change', function() {
+    const value = parseInt(this.value);
+    if (value < 1000) {
+        this.value = 1000;
+        alert('Minimum packet limit is 1000');
+    }
+});
+
   // 1. File selection handler
   function handleFileSelect(event) {
     selectedFile = event.target.files[0];
@@ -32,22 +40,24 @@ document.addEventListener('DOMContentLoaded', () => {
   // 2. Process PCAP file
   async function processPcapFile() {
     if (!selectedFile) {
-      alert('Please select a file first');
-      return;
+        alert('Please select a file first');
+        return;
     }
 
     try {
-      updateProgress('Uploading file...', 10);
-      processBtn.disabled = true;
-      clearPreviousGraph();
+        updateProgress('Uploading file...', 10);
+        processBtn.disabled = true;
+        clearPreviousGraph();
 
-      const formData = new FormData();
-      formData.append('file', selectedFile);
+        const maxPackets = document.getElementById('max-packets').value;
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+        formData.append('max_packets', maxPackets);  // Add max_packets parameter
 
-      const response = await fetch('/api/analyze', {
-        method: 'POST',
-        body: formData
-      });
+        const response = await fetch('/api/analyze', {
+            method: 'POST',
+            body: formData
+        });
 
       if (!response.ok) throw new Error('Analysis failed');
       
@@ -153,14 +163,16 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function showResults(data) {
+    const maxPackets = document.getElementById('max-packets').value;
     resultsSummary.innerHTML = `
-      <h3>Analysis Results</h3>
-      <p><strong>Filename:</strong> ${data.meta.filename}</p>
-      <p><strong>Processing Time:</strong> ${data.meta.processing_time.toFixed(2)}s</p>
-      <p><strong>Device Used:</strong> ${data.meta.device}</p>
-      <p><strong>Attacks Detected:</strong> ${data.meta.attack_count}</p>
+        <h3>Analysis Results</h3>
+        <p><strong>Filename:</strong> ${data.meta.filename}</p>
+        <p><strong>Processing Time:</strong> ${data.meta.processing_time.toFixed(2)}s</p>
+        <p><strong>Device Used:</strong> ${data.meta.device}</p>
+        <p><strong>Packet Limit:</strong> ${maxPackets}</p>
+        <p><strong>Attacks Detected:</strong> ${data.meta.attack_count}</p>
     `;
-  }
+}
 
   function formatFileSize(bytes) {
     if (bytes === 0) return '0 Bytes';

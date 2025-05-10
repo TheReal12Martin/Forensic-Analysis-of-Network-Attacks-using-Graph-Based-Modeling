@@ -1,13 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Network Attack Detection System</title>
-    <link rel="stylesheet" href="/static/styles.css">
-    <script src="https://unpkg.com/3d-force-graph"></script>
-    <script src="/static/script.js" defer></script>
-</head>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Network Attack Detection System</title>
+        <link rel="stylesheet" href="/static/styles.css">
+        <script src="https://unpkg.com/3d-force-graph"></script>
+        <script src="/static/script.js" defer></script>
+    </head>
 <body>
     <div id="app-container">
         <div id="header">
@@ -19,6 +19,11 @@
             <label for="file-input" class="upload-btn">Choose PCAP File</label>
             <input type="file" id="file-input" accept=".pcap,.pcapng">
             <div id="file-info">No file selected</div>
+            <div id="packet-controls">
+                <label for="max-packets">Max Packets to Process:</label>
+                <input type="number" id="max-packets" min="1000" value="100000" step="1000">
+            </div>
+            
             <button id="process-btn" class="process-btn" disabled>Analyze</button>
             <div class="progress-container">
                 <progress id="progress-bar" value="0" max="100"></progress>

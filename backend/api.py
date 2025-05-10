@@ -1,7 +1,8 @@
 import os
 import time
 import tempfile
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from typing import Optional
+from fastapi import FastAPI, Form, UploadFile, File, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +22,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "../frontend")), name="static")
+frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
+print(f"Static files path: {frontend_dir}")  # Debug output
+
+# Mount static files - this should be after app = FastAPI()
+app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 
 # Initialize system (your original config)
 def init_system():
@@ -42,10 +47,10 @@ system = init_system()
 
 @app.get("/")
 async def serve_frontend():
-    return FileResponse(os.path.join(os.path.dirname(__file__), "../frontend/index.html"))
+    return FileResponse(os.path.join(frontend_dir, "index.html"))
 
 @app.post("/api/analyze")
-async def analyze_pcap(file: UploadFile = File(...)):
+async def analyze_pcap(file: UploadFile = File(...), max_packets: Optional[int] = Form(None)):
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pcap") as tmp:
             content = await file.read()
@@ -53,7 +58,7 @@ async def analyze_pcap(file: UploadFile = File(...)):
             tmp_path = tmp.name
 
         start_time = time.time()
-        raw_graph = system['processor'].process_pcap(tmp_path)
+        raw_graph = system['processor'].process_pcap(tmp_path, max_packets=max_packets)
         
         if not raw_graph or len(raw_graph['nodes']) < 2:
             raise HTTPException(status_code=400, detail="Not enough nodes for analysis")

@@ -129,3 +129,22 @@ progress {
     border-radius: 4px;
     padding: 5px 10px;
 }
+
+#packet-controls {
+    background: #f8f8f8;
+    padding: 10px;
+    border-radius: 4px;
+    margin: 15px 0;
+}
+
+#packet-controls label {
+    margin-right: 10px;
+    font-weight: bold;
+}
+
+#max-packets {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 5px 10px;
+    width: 100px;
+}
