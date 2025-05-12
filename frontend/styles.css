@@ -148,3 +148,79 @@ progress {
     padding: 5px 10px;
     width: 100px;
 }
+#node-popup {
+    position: fixed;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 15px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 1000;
+    max-width: 300px;
+    font-family: Arial, sans-serif;
+    display: none;
+}
+
+#node-popup h3 {
+    margin: 0 0 10px 0;
+    font-size: 18px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid #eee;
+}
+
+#node-popup p {
+    margin: 8px 0;
+}
+
+#node-popup ul {
+    margin: 5px 0;
+    padding-left: 20px;
+    max-height: 120px;
+    overflow-y: auto;
+    background: #f9f9f9;
+    padding: 8px;
+    border-radius: 4px;
+}
+
+#node-popup li {
+    margin: 3px 0;
+}
+
+#node-popup button {
+    background: #2196F3;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 12px;
+    cursor: pointer;
+    margin-top: 10px;
+    width: 100%;
+}
+
+#node-popup button:hover {
+    background: #0b7dda;
+}
+
+.error-message {
+    background: #ffeeee;
+    border-left: 4px solid #ff3333;
+    padding: 15px;
+    margin: 10px 0;
+}
+
+.error-message h3 {
+    color: #ff3333;
+    margin-top: 0;
+}
+
+.error-message details {
+    margin-top: 10px;
+}
+
+.error-message pre {
+    background: #f8f8f8;
+    padding: 10px;
+    border-radius: 4px;
+    overflow-x: auto;
+    font-size: 13px;
+}
