@@ -12,9 +12,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let selectedFile = null;
   let graphInstance = null;
   let resizeObserver = null;
-  let currentXHR = null;
-  let nodeData = null; // Store node data for popup
-
+  let activeUploads = new Set();
+  let currentFileId = null;
+  
   // Create popup elements
   const popup = document.createElement('div');
   popup.id = 'node-popup';
@@ -28,13 +28,6 @@ document.addEventListener('DOMContentLoaded', () => {
   popup.style.display = 'none';
   popup.style.maxWidth = '300px';
   document.body.appendChild(popup);
-
-  // Close popup when clicking anywhere
-  document.addEventListener('click', (e) => {
-    if (!popup.contains(e.target)) {
-      popup.style.display = 'none';
-    }
-  });
 
   // Event listeners
   fileInput.addEventListener('change', handleFileSelect);
@@ -50,11 +43,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 1. File selection handler
   function handleFileSelect(event) {
-    if (currentXHR) {
-      currentXHR.abort();
-      currentXHR = null;
-    }
-
+    // Cancel any active uploads
+    activeUploads.forEach(xhr => xhr.abort());
+    activeUploads.clear();
+    
     selectedFile = event.target.files[0];
     if (selectedFile) {
       fileInfo.textContent = `Selected: ${selectedFile.name} (${formatFileSize(selectedFile.size)})`;
@@ -65,172 +57,178 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // 2. Process PCAP file
-  async function processPcapFile() {
-    // Clear previous results
+  // 2. Process PCAP file with chunked upload
+async function processPcapFile() {
     clearPreviousGraph();
     updateProgress('Initializing...', 0);
     
     try {
-        // Validate file selection
-        if (!selectedFile) {
-            throw new Error('No file selected');
-        }
+        if (!selectedFile) throw new Error('No file selected');
 
-        // Validate file size
-        const maxSize = 10 * 1024 * 1024 * 1024; // 10GB
-        if (selectedFile.size > maxSize) {
-            if (!confirm(`This file is large (${formatFileSize(selectedFile.size)}). Processing may take time. Continue?`)) {
-                return;
-            }
-        }
-
-        // Prepare form data
-        const formData = new FormData();
+        const chunkSize = 500 * 1024 * 1024; // 5MB chunks (smaller for better progress tracking)
+        const totalChunks = Math.ceil(selectedFile.size / chunkSize);
         const maxPackets = document.getElementById('max-packets').value;
-        
-        // Create blob with correct MIME type
-        const fileBlob = new Blob([selectedFile], { 
-            type: 'application/vnd.tcpdump.pcap' 
-        });
-        formData.append('file', fileBlob, selectedFile.name);
-        formData.append('max_packets', maxPackets);
+        currentFileId = uuidv4();
 
-        // Configure request
-        currentXHR = new XMLHttpRequest();
-        currentXHR.open('POST', '/api/analyze', true);
-        currentXHR.responseType = 'json';
-        
-        // Add debug headers
-        currentXHR.setRequestHeader('X-Debug-Info', 'pcap-analysis');
-        currentXHR.setRequestHeader('X-File-Size', selectedFile.size);
+        updateProgress(`Preparing upload (0/${totalChunks} chunks)`, 0);
 
-        // Upload progress tracking
-        currentXHR.upload.onprogress = (e) => {
-            if (e.lengthComputable) {
-                const percent = Math.round((e.loaded / e.total) * 100);
-                updateProgress(`Uploading... ${percent}%`, percent * 0.4);
-            }
-        };
+        // Upload chunks with retry logic
+        for (let i = 0; i < totalChunks; i++) {
+            const start = i * chunkSize;
+            const end = Math.min(selectedFile.size, start + chunkSize);
+            const chunk = selectedFile.slice(start, end);
 
-        // Response handling
-        currentXHR.onload = () => {
-            if (currentXHR.status === 200) {
+            const formData = new FormData();
+            formData.append("file", chunk, selectedFile.name);
+            formData.append("chunk_index", i.toString());
+            formData.append("file_id", currentFileId);
+
+            let retries = 3;
+            let success = false;
+            
+            while (retries > 0 && !success) {
                 try {
-                    updateProgress('Processing results...', 60);
-                    const results = currentXHR.response;
-                    
-                    // Validate response structure
-                    if (!results || !results.nodes || !results.predictions) {
-                        throw new Error('Invalid server response format');
+                    const response = await fetch("/api/chunk", {
+                        method: "POST",
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`Chunk ${i} upload failed with status ${response.status}`);
                     }
-                    
-                    updateProgress('Rendering visualization...', 80);
-                    showResults(results);
-                    initVisualization(results);
-                    updateProgress('Analysis complete!', 100);
-                    
-                } catch (e) {
-                    handleError(new Error(`Result processing failed: ${e.message}`));
+
+                    success = true;
+                    updateProgress(`Uploading chunks (${i + 1}/${totalChunks})`, (i + 1) / totalChunks * 50);
+                } catch (error) {
+                    retries--;
+                    if (retries === 0) throw error;
+                    await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retry
                 }
-            } else {
-                let errorMsg = currentXHR.statusText;
-                try {
-                    const errorResponse = JSON.parse(currentXHR.responseText);
-                    errorMsg = errorResponse.detail || errorMsg;
-                } catch {}
-                handleError(new Error(`Server error: ${currentXHR.status} - ${errorMsg}`));
             }
-            currentXHR = null;
-        };
+        }
 
-        currentXHR.onerror = () => {
-            handleError(new Error('Network connection failed'));
-            currentXHR = null;
-        };
+        updateProgress('Merging and processing...', 60);
 
-        currentXHR.onabort = () => {
-            updateProgress('Upload cancelled', 0);
-            currentXHR = null;
-        };
+        const mergeResponse = await fetch("/api/merge", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                file_id: currentFileId,
+                filename: selectedFile.name,
+                total_chunks: totalChunks,
+                max_packets: maxPackets
+            })
+        });
 
-        // Start processing
-        updateProgress('Starting upload...', 5);
-        processBtn.disabled = true;
-        currentXHR.send(formData);
+        if (!mergeResponse.ok) {
+            throw new Error("Merge or processing failed");
+        }
+
+        const results = await mergeResponse.json();
+        updateProgress('Processing results...', 80);
+        showResults(results);
+        initVisualization(results);
+        updateProgress('Analysis complete!', 100);
 
     } catch (error) {
         handleError(error);
+    } finally {
+        processBtn.disabled = false;
     }
 }
 
-function handleError(error) {
+
+  async function mergeAndProcess(fileId, filename, totalChunks, maxPackets) {
+    const formData = new FormData();
+    formData.append('file_id', fileId);
+    formData.append('original_filename', filename);
+    formData.append('total_chunks', totalChunks.toString());
+    formData.append('max_packets', maxPackets);
+
+    const response = await fetch('/api/merge', {
+        method: 'POST',
+        body: formData
+    });
+
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.detail || 'Merge failed');
+    }
+
+    return await response.json();
+}
+
+  function handleError(error) {
     console.error('Error:', error);
     
     let message = error.message;
     if (message.includes('413')) {
-        message = 'File too large (max 10GB)';
+      message = 'File too large (max 10GB)';
     } else if (message.includes('400')) {
-        message = 'Invalid file format or parameters';
+      message = 'Invalid file format or parameters';
     } else if (message.includes('Network Error')) {
-        message = 'Network connection failed';
+      message = 'Network connection failed';
     }
     
     updateProgress(`Error: ${message}`, 100);
     
-    // Show detailed error in results section
     resultsSummary.innerHTML = `
-        <div class="error-message">
-            <h3>Analysis Failed</h3>
-            <p><strong>Reason:</strong> ${message}</p>
-            ${error.stack ? `<details><summary>Technical details</summary><pre>${error.stack}</pre></details>` : ''}
-        </div>
+      <div class="error-message">
+        <h3>Analysis Failed</h3>
+        <p><strong>Reason:</strong> ${message}</p>
+        ${error.stack ? `<details><summary>Technical details</summary><pre>${error.stack}</pre></details>` : ''}
+      </div>
     `;
     
     processBtn.disabled = false;
-    if (currentXHR) {
-        currentXHR.abort();
-        currentXHR = null;
-    }
-}
+    activeUploads.forEach(xhr => xhr.abort());
+    activeUploads.clear();
+  }
 
-function clearPreviousGraph() {
+  function clearPreviousGraph() {
     if (graphInstance) {
-        try {
-            graphInstance.pauseAnimation();
-            const renderer = graphInstance.renderer();
-            if (renderer) {
-                renderer.dispose();
-                if (renderer.domElement.parentNode) {
-                    renderer.domElement.parentNode.removeChild(renderer.domElement);
-                }
-            }
-        } catch (e) {
-            console.warn('Error cleaning up graph:', e);
+      try {
+        graphInstance.pauseAnimation();
+        const renderer = graphInstance.renderer();
+        if (renderer) {
+          renderer.dispose();
+          if (renderer.domElement.parentNode) {
+            renderer.domElement.parentNode.removeChild(renderer.domElement);
+          }
         }
+      } catch (e) {
+        console.warn('Error cleaning up graph:', e);
+      }
     }
 
-    // Create fresh container
     const newContainer = document.createElement('div');
     newContainer.id = 'graph-container';
     newContainer.style.width = '100%';
     newContainer.style.height = '600px';
     graphContainer.replaceWith(newContainer);
     graphContainer = newContainer;
-}
+  }
 
-function updateProgress(message, percent) {
+  function updateProgress(message, percent) {
     progressText.textContent = message;
     progressBar.value = percent;
-}
+  }
 
-function formatFileSize(bytes) {
+  function formatFileSize(bytes) {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
     const sizes = ['Bytes', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i]);
-}
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
+
+  function uuidv4() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  }
 
   // 4. GRAPH INITIALIZATION with popup support
   function initVisualization(results) {

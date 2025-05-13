@@ -1,32 +1,42 @@
 import os
+import shutil
 import time
 import tempfile
 import traceback
+import uuid
 from typing import Optional
-from fastapi import FastAPI, Form, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, Form, Header, UploadFile, File, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
+from pydantic import BaseModel
 import torch
 from .pcap_processor import PCAPProcessor
 from .classifier import NetworkAttackClassifier
 from torch_geometric.data import Data
 import asyncio
+from pathlib import Path
+from starlette.formparsers import MultiPartParser
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+import aiofiles
 
 app = FastAPI(
-    max_upload_size=10 * 1024 * 1024 * 1024,  # 10GB max upload size
-    timeout=3600  # 1 hour timeout
+    max_upload_size=10 * 1024 * 1024 * 1024,  # 10GB
+    debug=True
 )
 
-# Enable CORS
+# Simplified CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"]
+    allow_headers=["*"]
 )
+
+UPLOAD_DIR = Path("upload_chunks")
+UPLOAD_DIR.mkdir(exist_ok=True)
 
 frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 print(f"Static files path: {frontend_dir}")  # Debug output
@@ -52,80 +62,72 @@ def init_system():
 
 system = init_system()
 
-# Timeout middleware for large files
-@app.middleware("http")
-async def timeout_middleware(request: Request, call_next):
-    try:
-        # Set timeout to 1 hour for large files
-        timeout = 3600 if request.url.path == "/api/analyze" else 60
-        return await asyncio.wait_for(call_next(request), timeout=timeout)
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Processing timeout")
-
 @app.get("/")
 async def serve_frontend():
     return FileResponse(os.path.join(frontend_dir, "index.html"))
 
-@app.post("/api/analyze")
-async def analyze_pcap(
-    request: Request,
+# api.py - updated /api/chunk endpoint
+@app.post("/api/chunk")
+async def upload_chunk(
     file: UploadFile = File(...),
-    max_packets: str = Form("100000")
+    chunk_index: int = Form(...),
+    file_id: str = Form(...)
 ):
-    import time, os, tempfile, traceback
-    start_time = time.time()
-    temp_dir = temp_path = None
-    file_size = 0
-
-    print(f"[DEBUG] Start Analyze")
-
     try:
-        # === 1. BASIC INPUT VALIDATION ===
-        print("[DEBUG] analyze_pcap() called")
-        if not file or not file.filename:
-            raise HTTPException(400, "No file provided")
+        chunk_folder = UPLOAD_DIR / file_id
+        chunk_folder.mkdir(parents=True, exist_ok=True)
+        chunk_path = chunk_folder / f"{chunk_index}"
+        
+        async with aiofiles.open(chunk_path, "wb") as buffer:
+            while content := await file.read(500 * 1024 * 1024):  # 1MB chunks
+                await buffer.write(content)
+                
+        return {"status": "ok", "chunk": chunk_index}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+    
 
-        print(f"[DEBUG] Received file: {file.filename}")
-        print(f"[DEBUG] file.content_type: {file.content_type}")
+class MergeRequest(BaseModel):
+    file_id: str
+    filename: str
+    total_chunks: int
+    max_packets: int
 
-        try:
-            max_packets = int(max_packets)
-            if max_packets < 1000:
-                max_packets = 1000
-        except ValueError:
-            raise HTTPException(400, "max_packets must be an integer")
+@app.post("/api/merge")
+async def merge_chunks(req: MergeRequest):
+    chunk_folder = UPLOAD_DIR / req.file_id
+    merged_file_path = chunk_folder / req.filename
 
-        print("[DEBUG] Passed Max Packets Validation")
+    # Check that all chunks exist
+    for i in range(req.total_chunks):
+        if not (chunk_folder / str(i)).exists():
+            raise HTTPException(status_code=400, detail=f"Missing chunk {i}")
 
-        # === 2. CREATE TEMP FILE ===
-        temp_dir = tempfile.mkdtemp(prefix="pcap_")
-        temp_path = os.path.join(temp_dir, "upload.pcap")
-        print(f"[DEBUG] Temp file real path: {temp_path}")
+    # Merge chunks into a single file
+    with open(merged_file_path, "wb") as outfile:
+        for i in range(req.total_chunks):
+            with open(chunk_folder / str(i), "rb") as infile:
+                shutil.copyfileobj(infile, outfile)
 
-        # === 3. STREAM FILE TO DISK ===
-        try:
-            with open(temp_path, "wb") as f:
-                chunk_count = 0
-                while True:
-                    chunk = await file.read(1024 * 1024)
-                    if not chunk:
-                        print(f"[DEBUG] EOF after {chunk_count} chunks, {file_size} bytes")
-                        break
-                    f.write(chunk)
-                    file_size += len(chunk)
-                    chunk_count += 1
-                    if chunk_count % 100 == 0:
-                        print(f"[DEBUG] Read {chunk_count} chunks ({file_size / (1024*1024):.2f} MB)")
-        except Exception as e:
-            raise HTTPException(500, f"Failed to save file: {e}")
+    # Process the merged file
+    try:
+        results = process_pcap_file(str(merged_file_path), req.max_packets)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
-        print(f"[DEBUG] File exists after write? {os.path.exists(temp_path)}")
-        print(f"[DEBUG] File size on disk: {os.path.getsize(temp_path)} bytes")
+    return JSONResponse(content=results)
 
-        if os.path.getsize(temp_path) == 0:
-            raise HTTPException(400, "Empty file received")
+async def process_pcap_file(file_path: str, filename: str, max_packets: str):
+    start_time = time.time()
+    file_size = os.path.getsize(file_path)
+    
+    try:
+        max_packets = int(max_packets)
+        if max_packets < 1000:
+            max_packets = 1000
 
-        # === 4. VALIDATE MAGIC NUMBER ===
+        # Validate magic number
         valid_magic_numbers = {
             b"\xa1\xb2\xc3\xd4",  # pcap
             b"\xd4\xc3\xb2\xa1",
@@ -133,20 +135,17 @@ async def analyze_pcap(
             b"\x4d\x3c\xb2\xa1",
             b"\x0a\x0d\x0d\x0a",  # pcapng
         }
-        with open(temp_path, "rb") as f:
+        with open(file_path, "rb") as f:
             magic = f.read(4)
-            print(f"[DEBUG] PCAP magic: {magic.hex()}")
             if magic not in valid_magic_numbers:
                 raise HTTPException(400, "Invalid PCAP file format")
 
-        # === 5. PARSE FILE ===
-        print(f"=== PROCESSING PCAP: {os.path.basename(temp_path)} ===")
-        raw_graph = system['processor'].process_pcap(temp_path, max_packets)
+        # Process the file
+        raw_graph = system['processor'].process_pcap(file_path, max_packets)
 
         if not raw_graph or len(raw_graph['nodes']) < 2:
             raise HTTPException(400, "Not enough network nodes detected (min 2 required)")
 
-        from torch_geometric.data import Data
         graph_data = Data(
             x=raw_graph['x'],
             edge_index=raw_graph['edge_index'],
@@ -156,27 +155,11 @@ async def analyze_pcap(
         graph_data.nodes = raw_graph['nodes']  # preserve custom node info
 
         results = system['classifier'].classify(graph_data)
-
-        # === 6. FORMAT RESPONSE ===
-        def convert_for_json(obj):
-            import torch, numpy as np
-            if torch.is_tensor(obj):
-                return obj.cpu().numpy().tolist()
-            elif isinstance(obj, np.ndarray):
-                return obj.tolist()
-            elif isinstance(obj, (np.integer, np.floating)):
-                return float(obj) if isinstance(obj, np.floating) else int(obj)
-            elif isinstance(obj, dict):
-                return {k: convert_for_json(v) for k, v in obj.items()}
-            elif isinstance(obj, (list, tuple)):
-                return [convert_for_json(item) for item in obj]
-            return obj
-
         attack_count = int(np.sum(results['predictions']))
 
         return JSONResponse(content={
             "meta": {
-                "filename": file.filename,
+                "filename": filename,
                 "processing_time": round(time.time() - start_time, 2),
                 "device": str(system['device']),
                 "attack_count": attack_count,
@@ -197,13 +180,26 @@ async def analyze_pcap(
         traceback.print_exc()
         raise HTTPException(500, f"Unexpected server error: {e}")
     finally:
-        if temp_path and os.path.exists(temp_path):
-            try: os.unlink(temp_path)
-            except: pass
-        if temp_dir and os.path.exists(temp_dir):
-            try: os.rmdir(temp_dir)
-            except: pass
+        if os.path.exists(file_path):
+            try:
+                os.unlink(file_path)
+                os.rmdir(os.path.dirname(file_path))
+            except:
+                pass
 
+def convert_for_json(obj):
+    import torch, numpy as np
+    if torch.is_tensor(obj):
+        return obj.cpu().numpy().tolist()
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.integer, np.floating)):
+        return float(obj) if isinstance(obj, np.floating) else int(obj)
+    elif isinstance(obj, dict):
+        return {k: convert_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [convert_for_json(item) for item in obj]
+    return obj
 
 if __name__ == "__main__":
     import uvicorn
