@@ -94,39 +94,89 @@ class MergeRequest(BaseModel):
     total_chunks: int
     max_packets: int
 
+# api.py - updated merge endpoint
 @app.post("/api/merge")
 async def merge_chunks(req: MergeRequest):
-    chunk_folder = UPLOAD_DIR / req.file_id
-    merged_file_path = chunk_folder / req.filename
-
-    # Check that all chunks exist
-    for i in range(req.total_chunks):
-        if not (chunk_folder / str(i)).exists():
-            raise HTTPException(status_code=400, detail=f"Missing chunk {i}")
-
-    # Merge chunks into a single file
-    with open(merged_file_path, "wb") as outfile:
-        for i in range(req.total_chunks):
-            with open(chunk_folder / str(i), "rb") as infile:
-                shutil.copyfileobj(infile, outfile)
-
-    # Process the merged file
     try:
-        results = process_pcap_file(str(merged_file_path), req.max_packets)
+        chunk_folder = UPLOAD_DIR / req.file_id
+        merged_file_path = chunk_folder / req.filename
+
+        # Verify all chunks exist
+        missing_chunks = []
+        for i in range(req.total_chunks):
+            chunk_path = chunk_folder / str(i)
+            if not chunk_path.exists():
+                missing_chunks.append(i)
+        
+        if missing_chunks:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing chunks: {missing_chunks}"
+            )
+
+        # Merge chunks
+        async with aiofiles.open(merged_file_path, 'wb') as outfile:
+            for i in range(req.total_chunks):
+                chunk_path = chunk_folder / str(i)
+                async with aiofiles.open(chunk_path, 'rb') as infile:
+                    while content := await infile.read(1024 * 1024):  # 1MB chunks
+                        await outfile.write(content)
+                # Remove the chunk after merging
+                try:
+                    os.unlink(chunk_path)
+                except:
+                    pass
+
+        # Process the merged file
+        try:
+            results = await process_pcap_file(str(merged_file_path), req.filename, req.max_packets)
+            return results
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Processing failed: {str(e)}"
+            )
+        finally:
+            # Clean up merged file
+            try:
+                os.unlink(merged_file_path)
+                os.rmdir(chunk_folder)
+            except:
+                pass
+
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Merge failed: {str(e)}"
+        )
+    
+# api.py - add cleanup endpoint
+@app.delete("/api/cleanup")
+async def cleanup_upload(file_id: str):
+    try:
+        chunk_folder = UPLOAD_DIR / file_id
+        if chunk_folder.exists():
+            for file in chunk_folder.glob("*"):
+                try:
+                    os.unlink(file)
+                except:
+                    pass
+            try:
+                os.rmdir(chunk_folder)
+            except:
+                pass
+        return {"status": "cleaned"}
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
 
-    return JSONResponse(content=results)
-
-async def process_pcap_file(file_path: str, filename: str, max_packets: str):
+async def process_pcap_file(file_path: str, filename: str, max_packets: int):
     start_time = time.time()
     file_size = os.path.getsize(file_path)
     
     try:
-        max_packets = int(max_packets)
-        if max_packets < 1000:
-            max_packets = 1000
-
         # Validate magic number
         valid_magic_numbers = {
             b"\xa1\xb2\xc3\xd4",  # pcap
@@ -135,8 +185,9 @@ async def process_pcap_file(file_path: str, filename: str, max_packets: str):
             b"\x4d\x3c\xb2\xa1",
             b"\x0a\x0d\x0d\x0a",  # pcapng
         }
-        with open(file_path, "rb") as f:
-            magic = f.read(4)
+        
+        async with aiofiles.open(file_path, "rb") as f:
+            magic = await f.read(4)
             if magic not in valid_magic_numbers:
                 raise HTTPException(400, "Invalid PCAP file format")
 
@@ -157,7 +208,7 @@ async def process_pcap_file(file_path: str, filename: str, max_packets: str):
         results = system['classifier'].classify(graph_data)
         attack_count = int(np.sum(results['predictions']))
 
-        return JSONResponse(content={
+        return {
             "meta": {
                 "filename": filename,
                 "processing_time": round(time.time() - start_time, 2),
@@ -172,20 +223,13 @@ async def process_pcap_file(file_path: str, filename: str, max_packets: str):
             "probabilities": convert_for_json(results['probabilities']),
             "edges": convert_for_json(raw_graph['edge_index']),
             "features": convert_for_json(raw_graph['x']) if 'x' in raw_graph else None
-        })
+        }
 
-    except HTTPException as he:
-        raise he
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(500, f"Unexpected server error: {e}")
-    finally:
-        if os.path.exists(file_path):
-            try:
-                os.unlink(file_path)
-                os.rmdir(os.path.dirname(file_path))
-            except:
-                pass
 
 def convert_for_json(obj):
     import torch, numpy as np
