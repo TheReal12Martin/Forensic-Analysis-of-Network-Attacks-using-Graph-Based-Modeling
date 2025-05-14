@@ -96,7 +96,7 @@ class NetworkAttackClassifier:
         threshold = max(0.6, np.percentile(attack_probs, 99))  # Increase minimum threshold
         
         # --- Final Predictions ---
-        preds = (attack_probs > threshold).astype(int)
+        preds = (attack_probs >= threshold).astype(int)
         attack_indices = np.where(preds == 1)[0]
         adjusted_probs = np.where(
             preds[:, None] == 1,  # Check if prediction is attack

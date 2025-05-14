@@ -269,71 +269,87 @@ async function processPcapFile() {
         .nodeColor(node => node.group ? '#ff3333' : '#00cc00')
         .nodeVal(node => node.group ? 2 : 1) // Make attack nodes slightly larger
         .onNodeClick((node, event) => {
-            // Get connected nodes
-            const connectedNodes = [];
-            links.forEach(link => {
-                if (link.source === node.id) connectedNodes.push(link.target);
-                if (link.target === node.id) connectedNodes.push(link.source);
-            });
+          // Get connected nodes - fixed implementation
+          const connectedNodes = new Set();
+          links.forEach(link => {
+              if (link.source === node.id || link.source.id === node.id) {
+                  connectedNodes.add(link.target.id || link.target);
+              }
+              if (link.target === node.id || link.target.id === node.id) {
+                  connectedNodes.add(link.source.id || link.source);
+              }
+          });
 
-            // Get the original node data
-            const nodeIndex = results.nodes.indexOf(node.id);
-            const probabilities = results.probabilities[nodeIndex];
-            const features = results.features ? results.features[nodeIndex] : null;
+          // Get the original node data
+          const nodeIndex = results.nodes.indexOf(node.id);
+          const probabilities = results.probabilities[nodeIndex];
+          const features = results.features ? results.features[nodeIndex] : null;
 
-            // Create enhanced popup content
-            popup.innerHTML = `
-                <h3 style="color: ${node.group ? '#ff3333' : '#00cc00'}; margin-top: 0;">
-                    ${node.id}
-                </h3>
-                <p><strong>Type:</strong> <span style="color: ${node.group ? '#ff3333' : '#00cc00'}">${node.group ? 'ATTACK' : 'Normal'}</span></p>
-                <p><strong>Confidence:</strong> ${(node.confidence * 100).toFixed(1)}%</p>
-                <p><strong>Connections:</strong> ${connectedNodes.length} nodes</p>
-                
-                ${node.group ? `
-                <div style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
-                    <h4 style="margin-bottom: 5px;">Attack Indicators</h4>
-                    <ul style="margin-top: 5px; padding-left: 20px;">
-                        ${getAttackIndicators(probabilities, features).join('')}
-                    </ul>
-                </div>
-                ` : ''}
-                
-                ${connectedNodes.length > 0 ? `
-                <div style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
-                    <h4 style="margin-bottom: 5px;">Connected Nodes</h4>
-                    <div style="max-height: 100px; overflow-y: auto; background: #f5f5f5; padding: 5px; border-radius: 4px;">
-                        ${connectedNodes.slice(0, 10).map(n => `<div>${n}</div>`).join('')}
-                        ${connectedNodes.length > 10 ? `<div>+ ${connectedNodes.length - 10} more...</div>` : ''}
-                    </div>
-                </div>
-                ` : ''}
-                
-                ${features ? `
-                <div style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
-                    <h4 style="margin-bottom: 5px;">Key Metrics</h4>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 13px;">
-                        <div><strong>Connections:</strong> ${Math.round(features[0] * 1000)}</div>
-                        <div><strong>Packet Rate:</strong> ${(features[3] * 100).toFixed(1)}/s</div>
-                        <div><strong>Avg Size:</strong> ${Math.round(features[5] * 1500)}B</div>
-                        <div><strong>SYN Ratio:</strong> ${(features[8] * 100).toFixed(1)}%</div>
-                    </div>
-                </div>
-                ` : ''}
-                
-                <button onclick="this.parentElement.style.display='none'" 
-                        style="margin-top: 15px; width: 100%; padding: 8px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                    Close
-                </button>
-            `;
-            
-            // Position and show popup
-            popup.style.display = 'block';
-            popup.style.left = `${Math.min(event.clientX + 15, window.innerWidth - 350)}px`;
-            popup.style.top = `${Math.min(event.clientY + 15, window.innerHeight - 400)}px`;
-            
-            event.stopPropagation();
-        });
+          // Create enhanced popup content
+          popup.innerHTML = `
+              <h3 style="color: ${node.group ? '#ff3333' : '#00cc00'}; margin-top: 0;">
+                  ${node.id}
+              </h3>
+              <p><strong>Type:</strong> <span style="color: ${node.group ? '#ff3333' : '#00cc00'}">${node.group ? 'ATTACK' : 'Normal'}</span></p>
+              <p><strong>Confidence:</strong> ${(node.confidence * 100).toFixed(1)}%</p>
+              <p><strong>Connections:</strong> ${connectedNodes.size} nodes</p>
+              
+              ${node.group ? `
+              <div style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
+                  <h4 style="margin-bottom: 5px;">Attack Details</h4>
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 13px;">
+                      <div><strong>Attack Type:</strong> ${getAttackType(probabilities)}</div>
+                      <div><strong>Threat Level:</strong> ${getThreatLevel(node.confidence)}</div>
+                      <div><strong>Behavior Pattern:</strong> ${getBehaviorPattern(features)}</div>
+                      <div><strong>Risk Score:</strong> ${Math.round(node.confidence * 100)}/100</div>
+                  </div>
+                  
+                  <div style="margin-top: 10px;">
+                      <h4 style="margin-bottom: 5px;">Attack Indicators</h4>
+                      <ul style="margin-top: 5px; padding-left: 20px;">
+                          ${getAttackIndicators(probabilities, features).join('')}
+                      </ul>
+                  </div>
+              </div>
+              ` : ''}
+              
+              ${connectedNodes.size > 0 ? `
+              <div style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
+                  <h4 style="margin-bottom: 5px;">Connected Nodes</h4>
+                  <div style="max-height: 100px; overflow-y: auto; background: #f5f5f5; padding: 5px; border-radius: 4px;">
+                      ${Array.from(connectedNodes).slice(0, 10).map(n => `<div>${n}</div>`).join('')}
+                      ${connectedNodes.size > 10 ? `<div>+ ${connectedNodes.size - 10} more...</div>` : ''}
+                  </div>
+              </div>
+              ` : ''}
+              
+              ${features ? `
+              <div style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
+                  <h4 style="margin-bottom: 5px;">Network Metrics</h4>
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 13px;">
+                      <div><strong>Connections:</strong> ${Math.round(features[0] * 1000)}</div>
+                      <div><strong>Packet Rate:</strong> ${(features[3] * 100).toFixed(1)}/s</div>
+                      <div><strong>Avg Size:</strong> ${Math.round(features[5] * 1500)}B</div>
+                      <div><strong>SYN Ratio:</strong> ${(features[8] * 100).toFixed(1)}%</div>
+                      <div><strong>RST Ratio:</strong> ${(features[9] * 100).toFixed(1)}%</div>
+                      <div><strong>Duration:</strong> ${(features[2] * 60).toFixed(1)}s</div>
+                  </div>
+              </div>
+              ` : ''}
+              
+              <button onclick="this.parentElement.style.display='none'" 
+                      style="margin-top: 15px; width: 100%; padding: 8px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                  Close
+              </button>
+          `;
+          
+          // Position and show popup
+          popup.style.display = 'block';
+          popup.style.left = `${Math.min(event.clientX + 15, window.innerWidth - 350)}px`;
+          popup.style.top = `${Math.min(event.clientY + 15, window.innerHeight - 400)}px`;
+          
+          event.stopPropagation();
+      })
 
     // Close popup when clicking elsewhere
     document.addEventListener('click', (e) => {
@@ -351,31 +367,58 @@ async function processPcapFile() {
     });
     resizeObserver.observe(graphContainer);
 
+    function getAttackType(probabilities) {
+        if (!probabilities || probabilities.length < 2) return "Unknown";
+        const types = ["Normal", "DDoS", "Port Scan", "Brute Force", "Malware"];
+        const maxIndex = probabilities.indexOf(Math.max(...probabilities));
+        return types[maxIndex] || "Unknown";
+    }
+
+    function getThreatLevel(confidence) {
+        if (confidence > 0.9) return "Critical";
+        if (confidence > 0.7) return "High";
+        if (confidence > 0.5) return "Medium";
+        return "Low";
+    }
+
+    function getBehaviorPattern(features) {
+        if (!features) return "Unknown";
+        
+        if (features[3] > 0.8 && features[8] > 0.7) return "SYN Flood";
+        if (features[0] > 0.9 && features[5] < 0.2) return "Port Scan";
+        if (features[9] > 0.6 && features[2] < 0.1) return "Connection Reset Attack";
+        if (features[3] > 0.7 && features[5] > 0.8) return "Data Exfiltration";
+        
+        return "Suspicious Activity";
+    }
+
     // Helper function to generate attack indicators
     function getAttackIndicators(probabilities, features) {
-        const indicators = [];
-        
-        // Probability indicators
-        indicators.push(`<li>High attack probability (${(probabilities[1] * 100).toFixed(1)}%)</li>`);
-        
-        // Feature-based indicators (if available)
-        if (features) {
-            if (features[0] > 0.8) indicators.push('<li>Unusually high connection count</li>');
-            if (features[3] > 0.7) indicators.push('<li>Abnormal packet rate</li>');
-            if (features[6] > 0.75) indicators.push('<li>Suspicious packet size distribution</li>');
-            if (features[8] > 0.6) indicators.push('<li>High SYN flag ratio</li>');
-            if (features[9] > 0.5) indicators.push('<li>High RST flag ratio</li>');
-            if (features[10] > 0.8) indicators.push('<li>Unusual SYN+ACK pattern</li>');
-        }
-        
-        // Fallback if no specific indicators
-        if (indicators.length === 1) {
-            indicators.push('<li>Anomalous behavior detected</li>');
-            indicators.push('<li>Pattern matches known attack signatures</li>');
-        }
-        
-        return indicators;
-    }
+      const indicators = [];
+      
+      // Probability indicators
+      indicators.push(`<li>Attack probability: ${(probabilities[1] * 100).toFixed(1)}%</li>`);
+      
+      // Feature-based indicators (if available)
+      if (features) {
+          if (features[0] > 0.8) indicators.push(`<li>High connection count (${Math.round(features[0] * 1000)} connections)</li>`);
+          if (features[3] > 0.7) indicators.push(`<li>Abnormal packet rate (${(features[3] * 100).toFixed(1)} packets/sec)</li>`);
+          if (features[6] > 0.75) indicators.push('<li>Irregular packet size distribution (possible command & control traffic)</li>');
+          if (features[8] > 0.6) indicators.push(`<li>High SYN flag ratio (${(features[8] * 100).toFixed(1)}% of packets)</li>`);
+          if (features[9] > 0.5) indicators.push(`<li>High RST flag ratio (${(features[9] * 100).toFixed(1)}% of packets)</li>`);
+          if (features[10] > 0.8) indicators.push('<li>Unusual SYN+ACK pattern (possible TCP hijacking)</li>');
+          if (features[4] > 0.7) indicators.push('<li>High failed connection rate (possible brute force attempt)</li>');
+          if (features[7] > 0.6) indicators.push('<li>Irregular timing between packets (possible beaconing)</li>');
+      }
+      
+      // Fallback if no specific indicators
+      if (indicators.length === 1) {
+          indicators.push('<li>Matches known attack signatures in our database</li>');
+          indicators.push('<li>Behavior deviates significantly from network baseline</li>');
+      }
+      
+      return indicators;
+  }
 }
 
 

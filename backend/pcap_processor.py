@@ -1,3 +1,4 @@
+import ipaddress
 import tempfile
 import time
 import pandas as pd
@@ -6,7 +7,7 @@ import numpy as np
 from collections import defaultdict
 import torch
 import warnings
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 import subprocess
 import csv
 import os
@@ -59,7 +60,15 @@ class PCAPProcessor:
             # Try faster tshark CLI first
             try:
                 print("[DEBUG] Attempting tshark CLI processing...")
+                file_size = os.path.getsize(pcap_path)
+                if file_size > 10 * 1024 * 1024:  # 10MB
+                    print(f"[SECURITY] Large file detected ({file_size} bytes)")
+                    
+                # Process normally or handle oversized packets
                 result = self._process_via_tshark_cli(pcap_path, max_packets)
+                if isinstance(result, dict) and 'security_alert' in result:
+                    return result  # Bypass normal processing
+                
                 print("[DEBUG] tshark processing completed successfully")
             except Exception as e:
                 print(f"⚠️ tshark CLI failed, falling back to pyshark: {str(e)}")
@@ -149,7 +158,7 @@ class PCAPProcessor:
             'tshark',
             '-r', pcap_path,
             '-o', 'gui.max_tree_depth:200',
-            '--disable-protocol', 'mp2t',  # Only disable protocols that definitely exist
+            '--disable-protocol', 'mp2t',
             '-T', 'fields',
             '-E', 'header=y',
             '-E', 'separator=\t',
@@ -168,7 +177,6 @@ class PCAPProcessor:
         print(f"[DEBUG] Executing: {' '.join(cmd)}")
         
         try:
-            # Run with full error capture
             result = subprocess.run(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -214,9 +222,95 @@ class PCAPProcessor:
             return True
             
         except subprocess.CalledProcessError as e:
-            print(f"❌ Tshark failed (code {e.returncode})")
-            print(f"Stderr: {e.stderr[:500]}...")  # Print first 500 chars of error
-            raise Exception("Tshark processing failed")
+            if "bigger than maximum of" in e.stderr:
+                return self._handle_oversized_packet(pcap_path, e.stderr)
+            raise
+    
+
+    def _handle_oversized_packet(self, pcap_path: str, error_msg: str) -> Dict:
+        """Create comprehensive graph for oversized packet cases"""
+        print("[SECURITY] Creating enhanced malicious graph for oversized packet")
+        
+        # 1. Get basic PCAP info using capinfos
+        capinfo = self._get_capinfo(pcap_path)
+        ips = self._extract_ips_from_pcap(pcap_path)
+        
+        # 2. Create device-aware tensors
+        device = self.device
+        num_nodes = len(ips)
+        
+        # 3. Create features - mark all nodes as suspicious initially
+        x = torch.zeros((num_nodes, 13), dtype=torch.float32, device=device)
+        x[:, [0, 3, 5, 6, 7, 8, 9, 10]] = 0.9  # Suspicious features
+        
+        # 4. Create fully connected graph (since we don't know actual relationships)
+        edge_index = []
+        for i in range(num_nodes):
+            for j in range(i+1, num_nodes):
+                edge_index.append([i, j])
+        
+        return {
+            'nodes': list(ips),
+            'x': x,
+            'edge_index': torch.tensor(edge_index, dtype=torch.long, device=device).t().contiguous(),
+            'edge_attr': torch.ones(len(edge_index), dtype=torch.float32, device=device),
+            'y': torch.zeros(num_nodes, dtype=torch.long, device=device),
+            'security_alert': {
+                'oversized_packet': True,
+                'packet_size': int(error_msg.split("has ")[1].split("-byte")[0].replace(",", "")),
+                'total_nodes': num_nodes,
+                'capinfos': capinfo
+            }
+        }
+
+    def _get_capinfo(self, pcap_path: str) -> Dict:
+        """Get basic PCAP statistics using capinfos"""
+        try:
+            result = subprocess.run(
+                ['capinfos', pcap_path],
+                capture_output=True,
+                text=True
+            )
+            return {
+                line.split(':')[0].strip(): line.split(':')[1].strip()
+                for line in result.stdout.splitlines() 
+                if ':' in line
+            }
+        except Exception as e:
+            print(f"[WARNING] Capinfos failed: {str(e)}")
+            return {}
+
+    def _extract_ips_from_pcap(self, pcap_path: str) -> Set[str]:
+        """Quickly extract unique IPs using tshark, with filtering"""
+        try:
+            result = subprocess.run(
+                ['tshark', '-r', pcap_path, '-T', 'fields', '-e', 'ip.src', '-e', 'ip.dst'],
+                capture_output=True,
+                text=True
+            )
+            ips = set()
+            for line in result.stdout.splitlines():
+                parts = line.strip().split('\t')
+                if len(parts) < 2:
+                    continue
+                srcs = parts[0].split(',') if parts[0] else []
+                dsts = parts[1].split(',') if parts[1] else []
+                for ip in srcs + dsts:
+                    ip = ip.strip()
+                    if self._is_valid_ip(ip):
+                        ips.add(ip)
+            return ips
+        except Exception as e:
+            print(f"[WARNING] IP extraction failed: {str(e)}")
+            return {'unknown_src', 'unknown_dst'}
+
+    def _is_valid_ip(self, ip: str) -> bool:
+        """Simple IP format validator"""
+        try:
+            ipaddress.ip_address(ip)
+            return True
+        except ValueError:
+            return False
 
     def _process_dask_partition(self, df_partition):
         """Helper for Dask parallel processing"""
