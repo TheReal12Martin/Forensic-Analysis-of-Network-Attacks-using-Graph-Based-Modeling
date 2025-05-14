@@ -298,7 +298,7 @@ async function processPcapFile() {
               <div style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
                   <h4 style="margin-bottom: 5px;">Attack Details</h4>
                   <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 13px;">
-                      <div><strong>Attack Type:</strong> ${getAttackType(probabilities)}</div>
+                      <div><strong>Attack Type:</strong> ${inferAttackType(features)}</div>
                       <div><strong>Threat Level:</strong> ${getThreatLevel(node.confidence)}</div>
                       <div><strong>Behavior Pattern:</strong> ${getBehaviorPattern(features)}</div>
                       <div><strong>Risk Score:</strong> ${Math.round(node.confidence * 100)}/100</div>
@@ -373,6 +373,29 @@ async function processPcapFile() {
         const maxIndex = probabilities.indexOf(Math.max(...probabilities));
         return types[maxIndex] || "Unknown";
     }
+
+    function inferAttackType(features) {
+      const [
+        connections, flowCount, internalFlag,
+        pktRate, timeRange,
+        avgSize, stdSize, smallPktRatio,
+        synRatio, rstRatio, ackSynCombo,
+        tcpRatio, udpRatio
+      ] = features;
+
+      if (synRatio > 0.6 && pktRate > 0.5) {
+        return "DDoS";
+      } else if (rstRatio > 0.5 && timeRange < 0.3) {
+        return "Port Scan";
+      } else if (smallPktRatio > 0.8 && timeRange > 0.5) {
+        return "Data Exfiltration";
+      } else if (udpRatio > 0.6 && flowCount > 0.5) {
+        return "UDP Amplification";
+      } else {
+        return "Generic Malicious Activity";
+      }
+    }
+
 
     function getThreatLevel(confidence) {
         if (confidence > 0.9) return "Critical";
