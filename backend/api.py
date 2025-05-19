@@ -9,12 +9,14 @@ from fastapi import FastAPI, Form, Header, UploadFile, File, HTTPException, Requ
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+import networkx as nx
 import numpy as np
 from pydantic import BaseModel
 import torch
 from .pcap_processor import PCAPProcessor
 from .classifier import NetworkAttackClassifier
 from torch_geometric.data import Data
+from .graph_algorithms import GraphAnalyzer
 import asyncio
 from pathlib import Path
 from starlette.formparsers import MultiPartParser
@@ -61,6 +63,7 @@ def init_system():
     }
 
 system = init_system()
+system['graph_analyzer'] = GraphAnalyzer()
 
 @app.get("/")
 async def serve_frontend():
@@ -230,6 +233,59 @@ async def process_pcap_file(file_path: str, filename: str, max_packets: int):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(500, f"Unexpected server error: {e}")
+    
+@app.post("/api/analyze-communities")
+async def analyze_communities(request: Request):
+    try:
+        data = await request.json()
+        algorithm = data.get('algorithm', 'louvain')
+        
+        # Validate input data
+        if 'nodes' not in data or 'edges' not in data:
+            raise HTTPException(status_code=400, detail="Missing required fields: nodes or edges")
+        
+        # Convert to NetworkX graph
+        try:
+            G = nx.Graph()
+            
+            # Add nodes with their attributes
+            if isinstance(data['nodes'], list):
+                G.add_nodes_from(data['nodes'])
+            elif isinstance(data['nodes'], dict):
+                G.add_nodes_from(data['nodes'].items())
+            
+            # Add edges (assuming edges is [[source_indices], [target_indices]])
+            if isinstance(data['edges'], list) and len(data['edges']) == 2:
+                for src_idx, tgt_idx in zip(data['edges'][0], data['edges'][1]):
+                    if src_idx < len(data['nodes']) and tgt_idx < len(data['nodes']):
+                        src = data['nodes'][src_idx]
+                        tgt = data['nodes'][tgt_idx]
+                        G.add_edge(src, tgt)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid graph data: {str(e)}")
+        
+        # Run community detection
+        result = system['graph_analyzer'].detect_communities(
+            {'nodes': list(G.nodes()), 'edges': list(G.edges())},
+            algorithm=algorithm
+        )
+        
+        # Calculate metrics on the original partition
+        metrics = system['graph_analyzer'].get_community_metrics(
+            G, result['partition']
+        )
+        
+        return {
+            'status': 'success',
+            'algorithm': algorithm,
+            'communities': result['partition'],
+            'metrics': metrics,
+            'modularity': float(result.get('modularity', 0))
+        }
+        
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 def convert_for_json(obj):
     import torch, numpy as np

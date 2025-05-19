@@ -129,7 +129,7 @@ async function processPcapFile() {
         showResults(results);
         initVisualization(results);
         updateProgress('Analysis complete!', 100);
-
+        setCommunityGraphData(results);
     } catch (error) {
         handleError(error);
     } finally {
@@ -138,25 +138,6 @@ async function processPcapFile() {
 }
 
 
-  async function mergeAndProcess(fileId, filename, totalChunks, maxPackets) {
-    const formData = new FormData();
-    formData.append('file_id', fileId);
-    formData.append('original_filename', filename);
-    formData.append('total_chunks', totalChunks.toString());
-    formData.append('max_packets', maxPackets);
-
-    const response = await fetch('/api/merge', {
-        method: 'POST',
-        body: formData
-    });
-
-    if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail || 'Merge failed');
-    }
-
-    return await response.json();
-}
 
   function handleError(error) {
     console.error('Error:', error);
@@ -470,4 +451,265 @@ async function processPcapFile() {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
+
+  // ==============================
+// COMMUNITY ANALYSIS SECTION
+// ==============================
+
+// Store reference to the graph data (set this after main graph is rendered)
+let communityGraphData = null;
+
+// Event listener for "Analyze Communities" button
+document.getElementById('run-community-analysis').addEventListener('click', async () => {
+    const algorithm = document.getElementById('community-algorithm').value;
+    const button = document.getElementById('run-community-analysis');
+    
+    try {
+        button.disabled = true;
+        button.textContent = 'Processing...';
+        
+        if (!communityGraphData) {
+            throw new Error("No graph data available");
+        }
+
+        const communities = await runCommunityDetection(communityGraphData, algorithm);
+        renderCommunityGraph(communityGraphData, communities);
+        
+        // Show results section
+        document.getElementById('community-results').style.display = 'block';
+    } catch (error) {
+        console.error("Community analysis failed:", error);
+        alert(`Error: ${error.message}`);
+    } finally {
+        button.disabled = false;
+        button.textContent = 'Analyze Communities';
+    }
+});
+
+// Simulated community detection logic
+async function runCommunityDetection(graphData, algorithm) {
+    try {
+        // Prepare nodes list (ensure it's a flat array of node IDs)
+        const nodes = graphData.nodes.map(n => n.id);
+        
+        // Prepare edges as [[source_indices], [target_indices]]
+        const edges = [[], []];
+        graphData.links.forEach(link => {
+            const srcId = link.source.id || link.source;
+            const tgtId = link.target.id || link.target;
+            const srcIdx = nodes.indexOf(srcId);
+            const tgtIdx = nodes.indexOf(tgtId);
+            
+            if (srcIdx !== -1 && tgtIdx !== -1) {
+                edges[0].push(srcIdx);
+                edges[1].push(tgtIdx);
+            }
+        });
+
+        const response = await fetch('/api/analyze-communities', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                algorithm: algorithm,
+                nodes: nodes,
+                edges: edges,
+                predictions: graphData.nodes.map(n => n.group),
+                probabilities: graphData.nodes.map(n => n.probabilities)
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Community detection failed');
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error('Community detection error:', error);
+        throw error;
+    }
+}
+
+// Renders a second graph with nodes colored by community
+function renderCommunityGraph(graphData, apiResponse) {
+    const container = document.getElementById('community-graph-container');
+    container.innerHTML = '<div class="loading">Preparing visualization...</div>';
+    
+    try {
+        // Validate input data
+        if (!apiResponse?.communities || !graphData?.nodes) {
+            throw new Error("Invalid community data received");
+        }
+
+        // Get all unique community IDs
+        const communityIds = Object.values(apiResponse.communities);
+        const uniqueCommunityIds = [...new Set(communityIds)];
+        
+        // Create a stable color scale
+        const colorScale = d3.scaleOrdinal()
+            .domain(uniqueCommunityIds.sort((a, b) => a - b)) // Sort for consistent colors
+            .range(d3.schemeTableau10); // Using a more robust color scheme
+
+        // Count community sizes
+        const communitySizes = {};
+        graphData.nodes.forEach(node => {
+            const commId = apiResponse.communities[node.id];
+            communitySizes[commId] = (communitySizes[commId] || 0) + 1;
+        });
+
+        // Prepare nodes with community data
+        const coloredNodes = graphData.nodes.map(node => ({
+            ...node,
+            color: colorScale(apiResponse.communities[node.id]),
+            community: apiResponse.communities[node.id],
+            size: Math.max(1, Math.min(5, Math.sqrt(communitySizes[apiResponse.communities[node.id]] || 1)))
+        }));
+
+        // Prepare links
+        const links = graphData.links.map(link => ({
+            source: link.source.id || link.source,
+            target: link.target.id || link.target,
+            value: 1
+        }));
+
+        // Clear container and create graph
+        container.innerHTML = '';
+        const graph = ForceGraph3D()(container)
+            .graphData({ nodes: coloredNodes, links })
+            .nodeLabel(node => `${node.id}\nCommunity ${node.community}\n(${communitySizes[node.community]} nodes)`)
+            .nodeColor(node => node.color)
+            .nodeVal(node => node.size)
+            .linkWidth(0.2)
+            .linkDirectionalParticles(1)
+            .linkDirectionalParticleWidth(0.5);
+
+        // Add legend
+        addCommunityLegend(container, uniqueCommunityIds, communitySizes, colorScale);
+
+        // Update metrics display
+        updateCommunityMetrics(apiResponse, communitySizes, graphData.nodes.length);
+
+    } catch (error) {
+        console.error("Graph rendering failed:", error);
+        container.innerHTML = `
+            <div class="error-message">
+                <h3>Visualization Error</h3>
+                <p>${error.message}</p>
+            </div>
+        `;
+    }
+}
+
+function addCommunityLegend(container, communityIds, communitySizes, colorScale) {
+    const legend = document.createElement('div');
+    legend.className = 'community-legend';
+    
+    // Sort communities by size (descending)
+    const sortedCommunities = [...communityIds].sort((a, b) => communitySizes[b] - communitySizes[a]);
+    
+    legend.innerHTML = `
+        <h4>Detected Communities (${sortedCommunities.length})</h4>
+        ${sortedCommunities.map(commId => `
+            <div class="legend-item">
+                <span class="legend-color" style="background:${colorScale(commId)}"></span>
+                <span>Community ${commId}: ${communitySizes[commId]} nodes</span>
+            </div>
+        `).join('')}
+    `;
+    
+    container.appendChild(legend);
+}
+
+function updateCommunityMetrics(apiResponse, communitySizes, totalNodes) {
+    const metricsEl = document.getElementById('community-metrics');
+    if (!metricsEl) return;
+
+    const communityCount = Object.keys(communitySizes).length;
+    const minSize = Math.min(...Object.values(communitySizes));
+    const maxSize = Math.max(...Object.values(communitySizes));
+    
+    metricsEl.innerHTML = `
+        <div class="metric-row">
+            <span class="metric-label">Total Communities:</span>
+            <span class="metric-value">${communityCount}</span>
+        </div>
+        <div class="metric-row">
+            <span class="metric-label">Total Nodes:</span>
+            <span class="metric-value">${totalNodes}</span>
+        </div>
+        <div class="metric-row">
+            <span class="metric-label">Community Sizes:</span>
+            <span class="metric-value">${minSize} to ${maxSize} nodes</span>
+        </div>
+        <div class="metric-row">
+            <span class="metric-label">Modularity:</span>
+            <span class="metric-value">${apiResponse.modularity?.toFixed(4) || 'N/A'}</span>
+        </div>
+    `;
+}
+
+
+// Utility function to expose graphData when the original graph is ready
+function setCommunityGraphData(results) {
+    if (!results || !results.nodes || !results.edges) {
+        console.error("Invalid results format for community graph data.");
+        return;
+    }
+
+    const nodes = results.nodes.map((nodeId, i) => ({
+        id: nodeId,
+        group: results.predictions ? results.predictions[i] : null,
+        confidence: results.probabilities ? Math.max(...results.probabilities[i]) : null,
+        probabilities: results.probabilities ? results.probabilities[i] : null,
+        index: i,
+        features: results.features ? results.features[i] : null
+    }));
+
+    const links = results.edges[0].map((srcIdx, i) => ({
+        source: results.nodes[srcIdx],
+        target: results.nodes[results.edges[1][i]],
+        value: 1
+    }));
+
+    communityGraphData = { nodes, links };
+
+    const communityMetricsEl = document.getElementById('community-metrics');
+    const communityCounts = {};
+    let modularity = results.modularity ?? null;
+
+    nodes.forEach(n => {
+        if (n.group !== null) {
+            communityCounts[n.group] = (communityCounts[n.group] || 0) + 1;
+        }
+    });
+
+    const totalCommunities = Object.keys(communityCounts).length;
+    const totalNodes = nodes.length;
+    const totalLinks = links.length;
+
+    let html = `
+        <p><strong>Detected Communities:</strong> ${totalCommunities}</p>
+        <p><strong>Total Nodes:</strong> ${totalNodes}</p>
+        <p><strong>Total Edges:</strong> ${totalLinks}</p>
+    `;
+
+    if (modularity !== null) {
+        html += `<p><strong>Modularity Score:</strong> ${modularity.toFixed(4)}</p>`;
+    }
+
+    html += `<p><strong>Community Sizes:</strong></p><ul>`;
+    for (const [commId, size] of Object.entries(communityCounts)) {
+        html += `<li>Community ${commId}: ${size} nodes</li>`;
+    }
+    html += `</ul>`;
+
+    communityMetricsEl.innerHTML = html;
+
+    // Show the community section
+    document.getElementById('community-analysis-section').style.display = 'block';
+}
+
+
 });

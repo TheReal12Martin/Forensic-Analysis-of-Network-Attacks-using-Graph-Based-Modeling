@@ -224,3 +224,116 @@ progress {
     overflow-x: auto;
     font-size: 13px;
 }
+
+#community-analysis-section {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    margin-top: 20px;
+}
+
+#community-results {
+    background: #f9f9f9;
+    padding: 15px;
+    border-radius: 8px;
+    margin-top: 15px;
+}
+
+#community-metrics {
+    margin-bottom: 20px;
+}
+
+#community-graph-container {
+    position: relative;
+    overflow: hidden;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+#community-algorithm {
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    margin-right: 10px;
+}
+
+#community-graph-container {
+    width: 100%;
+    height: 600px;
+    min-height: 600px;
+    position: relative;
+    border: 1px solid #ccc; /* Visual boundary */
+    background-color: #f8f8f8;
+}
+
+#community-graph-container canvas {
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #666;
+    font-size: 18px;
+}
+
+.community-legend {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 10px;
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    font-size: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    z-index: 100;
+}
+
+.community-legend h4 {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    margin: 4px 0;
+}
+
+.legend-color {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    margin-right: 8px;
+}
+
+.metric-row {
+    display: flex;
+    margin: 5px 0;
+}
+
+.metric-label {
+    font-weight: bold;
+    min-width: 150px;
+}
+
+.metric-value {
+    color: #333;
+}
+
+.loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #666;
+}
