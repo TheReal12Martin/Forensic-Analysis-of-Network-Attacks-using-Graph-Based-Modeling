@@ -535,7 +535,9 @@ async function runCommunityDetection(graphData, algorithm) {
 // Renders a second graph with nodes colored by community
 function renderCommunityGraph(graphData, apiResponse) {
     const container = document.getElementById('community-graph-container');
-    container.innerHTML = '<div class="loading">Preparing visualization...</div>';
+    const legendContainer = document.getElementById('community-legend');
+    container.innerHTML = ''; // Clear previous content
+    legendContainer.innerHTML = '';
     
     try {
         // Validate input data
@@ -574,19 +576,26 @@ function renderCommunityGraph(graphData, apiResponse) {
             value: 1
         }));
 
-        // Clear container and create graph
-        container.innerHTML = '';
-        const graph = ForceGraph3D()(container)
+        const graphDiv = document.createElement('div');
+        graphDiv.style.width = '100%';
+        graphDiv.style.height = '100%';
+        container.appendChild(graphDiv);
+        
+        const graph = ForceGraph3D()(graphDiv)
             .graphData({ nodes: coloredNodes, links })
             .nodeLabel(node => `${node.id}\nCommunity ${node.community}\n(${communitySizes[node.community]} nodes)`)
             .nodeColor(node => node.color)
             .nodeVal(node => node.size)
-            .linkWidth(0.2)
-            .linkDirectionalParticles(1)
-            .linkDirectionalParticleWidth(0.5);
+            .linkWidth(1)
+
+        const resizeObserver = new ResizeObserver(() => {
+            graph.width(graphDiv.offsetWidth)
+                .height(graphDiv.offsetHeight);
+        });
+        resizeObserver.observe(graphDiv);
 
         // Add legend
-        addCommunityLegend(container, uniqueCommunityIds, communitySizes, colorScale);
+        addCommunityLegend(legendContainer, uniqueCommunityIds, communitySizes, colorScale);
 
         // Update metrics display
         updateCommunityMetrics(apiResponse, communitySizes, graphData.nodes.length);
