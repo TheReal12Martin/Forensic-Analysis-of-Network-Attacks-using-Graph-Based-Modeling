@@ -337,3 +337,39 @@ progress {
     transform: translate(-50%, -50%);
     color: #666;
 }
+
+.security-insights {
+    background: #fff8e1;
+    padding: 15px;
+    border-radius: 8px;
+    margin-top: 20px;
+    border-left: 4px solid #ffc107;
+}
+
+.insight-section {
+    margin-bottom: 15px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid #eee;
+}
+
+.insight-section h5 {
+    margin: 0 0 8px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.scrollable-list {
+    max-height: 150px;
+    overflow-y: auto;
+    background: #f9f9f9;
+    padding: 8px;
+    border-radius: 4px;
+}
+
+.node-info {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    font-size: 13px;
+}

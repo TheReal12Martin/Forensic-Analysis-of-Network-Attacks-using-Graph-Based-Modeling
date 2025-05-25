@@ -600,6 +600,16 @@ function renderCommunityGraph(graphData, apiResponse) {
         // Update metrics display
         updateCommunityMetrics(apiResponse, communitySizes, graphData.nodes.length);
 
+        if (apiResponse.security_insights) {
+        const insightsEl = document.createElement('div');
+        insightsEl.className = 'security-insights';
+        insightsEl.innerHTML = `
+            <h4>Security Insights</h4>
+            ${renderSecurityInsights(apiResponse.security_insights)}
+        `;
+        legendContainer.appendChild(insightsEl);
+    }
+
     } catch (error) {
         console.error("Graph rendering failed:", error);
         container.innerHTML = `
@@ -609,6 +619,60 @@ function renderCommunityGraph(graphData, apiResponse) {
             </div>
         `;
     }
+}
+
+function renderSecurityInsights(insights) {
+    let html = '';
+    
+    // Attack Campaigns
+    if (insights.attack_campaigns && Object.keys(insights.attack_campaigns).length) {
+        html += `
+        <div class="insight-section">
+            <h5>⚠️ Attack Campaigns</h5>
+            <p>${Object.keys(insights.attack_campaigns).length} communities with high attack concentration</p>
+            <ul>
+                ${Object.entries(insights.attack_campaigns).map(([comm, data]) => `
+                    <li>Community ${comm}: ${data[0]} attacks (${(data[1]*100).toFixed(1)}% of nodes)</li>
+                `).join('')}
+            </ul>
+        </div>`;
+    }
+    
+    // Lateral Movement
+    if (insights.lateral_movement?.length) {
+        html += `
+        <div class="insight-section">
+            <h5>🔀 Lateral Movement Paths</h5>
+            <p>${insights.lateral_movement.length} potential bridge nodes found</p>
+            <div class="scrollable-list">
+                ${insights.lateral_movement.slice(0,5).map(node => `
+                    <div class="node-info">
+                        <span>${node.node}</span>
+                        <span>Connects ${node.communities_connected} communities</span>
+                    </div>
+                `).join('')}
+            </div>
+        </div>`;
+    }
+    
+    // Command & Control
+    if (insights.command_control?.length) {
+        html += `
+        <div class="insight-section">
+            <h5>🎯 Command & Control</h5>
+            <p>${insights.command_control.length} star-shaped communities detected</p>
+            <div class="scrollable-list">
+                ${insights.command_control.slice(0,3).map(comm => `
+                    <div class="node-info">
+                        <span>Community ${comm.community}</span>
+                        <span>Center: ${comm.center_node} (${comm.degree} connections)</span>
+                    </div>
+                `).join('')}
+            </div>
+        </div>`;
+    }
+    
+    return html || '<p>No significant security patterns detected</p>';
 }
 
 function addCommunityLegend(container, communityIds, communitySizes, colorScale) {

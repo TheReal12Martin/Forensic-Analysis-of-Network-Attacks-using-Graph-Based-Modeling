@@ -274,13 +274,26 @@ async def analyze_communities(request: Request):
         metrics = system['graph_analyzer'].get_community_metrics(
             G, result['partition']
         )
+
+        predictions = {node: pred for node, pred in zip(data['nodes'], data.get('predictions', []))}
+        
+        security_insights = {
+            'attack_campaigns': system['graph_analyzer'].detect_attack_campaigns(
+                G, result['partition'], predictions),
+            'lateral_movement': system['graph_analyzer'].detect_lateral_movement(
+                G, result['partition']),
+            'command_control': system['graph_analyzer'].detect_command_control(
+                G, result['partition']),
+            # Add other detection methods here
+        }
         
         return {
             'status': 'success',
             'algorithm': algorithm,
             'communities': result['partition'],
             'metrics': metrics,
-            'modularity': float(result.get('modularity', 0))
+            'modularity': float(result.get('modularity', 0)),
+            'security_insights': security_insights
         }
         
     except Exception as e:

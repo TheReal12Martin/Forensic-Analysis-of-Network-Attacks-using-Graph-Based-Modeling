@@ -213,3 +213,59 @@ class GraphAnalyzer:
             subgraph = G.subgraph(nodes)
             densities[comm_id] = nx.density(subgraph)
         return densities
+    
+    def detect_attack_campaigns(self, G, partition, predictions):
+        """Identify communities with high attack node concentration"""
+        attack_communities = {}
+        for node, comm in partition.items():
+            if predictions.get(node, 0) == 1:  # Assuming 1 is attack
+                attack_communities[comm] = attack_communities.get(comm, 0) + 1
+        
+        # Normalize by community size
+        community_sizes = {comm: sum(1 for n in partition.values() if n == comm) 
+                        for comm in set(partition.values())}
+        
+        return {
+            comm: (count, count/community_sizes[comm])
+            for comm, count in attack_communities.items()
+            if count/community_sizes[comm] > 0.7  # Threshold for "high concentration"
+        }
+
+    def detect_lateral_movement(self, G, partition):
+        """Find nodes connecting different communities"""
+        bridge_nodes = []
+        for node in G.nodes():
+            neighbors = list(G.neighbors(node))
+            if len(neighbors) < 2: continue
+            
+            neighbor_comms = {partition[n] for n in neighbors if n in partition}
+            if len(neighbor_comms) > 1:
+                bridge_nodes.append({
+                    'node': node,
+                    'communities_connected': len(neighbor_comms),
+                    'betweenness': nx.betweenness_centrality(G).get(node, 0)
+                })
+        
+        return sorted(bridge_nodes, key=lambda x: -x['betweenness'])
+
+    def detect_command_control(self, G, partition):
+        """Identify star-shaped communities with central nodes"""
+        suspicious = []
+        for comm in set(partition.values()):
+            nodes = [n for n in partition if partition[n] == comm]
+            subgraph = G.subgraph(nodes)
+            
+            if len(nodes) < 3: continue
+            
+            degrees = dict(subgraph.degree())
+            max_degree = max(degrees.values())
+            if max_degree / len(nodes) > 0.8:  # One node connects to most others
+                center = max(degrees.items(), key=lambda x: x[1])[0]
+                suspicious.append({
+                    'community': comm,
+                    'center_node': center,
+                    'degree': max_degree,
+                    'size': len(nodes)
+                })
+        
+        return suspicious
