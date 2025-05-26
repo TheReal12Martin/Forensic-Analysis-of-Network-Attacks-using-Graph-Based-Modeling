@@ -489,41 +489,51 @@ document.getElementById('run-community-analysis').addEventListener('click', asyn
 // Simulated community detection logic
 async function runCommunityDetection(graphData, algorithm) {
     try {
-        // Prepare nodes list (ensure it's a flat array of node IDs)
-        const nodes = graphData.nodes.map(n => n.id);
-        
-        // Prepare edges as [[source_indices], [target_indices]]
-        const edges = [[], []];
-        graphData.links.forEach(link => {
-            const srcId = link.source.id || link.source;
-            const tgtId = link.target.id || link.target;
-            const srcIdx = nodes.indexOf(srcId);
-            const tgtIdx = nodes.indexOf(tgtId);
-            
-            if (srcIdx !== -1 && tgtIdx !== -1) {
-                edges[0].push(srcIdx);
-                edges[1].push(tgtIdx);
-            }
-        });
+        console.time('Total Community Detection Time');
 
+        console.time('Step 1: Preparing node list');
+        const nodes = graphData.nodes.map(n => n.id);
+        console.timeEnd('Step 1: Preparing node list');
+
+        console.time('Step 2: Building node index map');
+        const nodeIndexMap = new Map();
+        nodes.forEach((id, idx) => nodeIndexMap.set(id, idx));
+        console.timeEnd('Step 2: Building node index map');
+
+        console.time('Step 3: Processing edges');
+
+        const edges = graphData.links.map(link => [
+            link.source.id || link.source,
+            link.target.id || link.target
+        ]);
+        console.timeEnd('Step 3: Processing edges');
+
+        console.time('Step 4: Preparing payload');
+        const payload = {
+            algorithm: algorithm,
+            nodes: nodes,
+            edges: edges,
+            predictions: graphData.nodes.map(n => n.group),
+            //probabilities: graphData.nodes.map(n => n.probabilities)
+        };
+        console.timeEnd('Step 4: Preparing payload');
+
+        console.time('Step 5: Sending request');
         const response = await fetch('/api/analyze-communities', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-                algorithm: algorithm,
-                nodes: nodes,
-                edges: edges,
-                predictions: graphData.nodes.map(n => n.group),
-                probabilities: graphData.nodes.map(n => n.probabilities)
-            })
+            body: JSON.stringify(payload)
         });
+        console.timeEnd('Step 5: Sending request');
 
         if (!response.ok) {
             const error = await response.json();
             throw new Error(error.detail || 'Community detection failed');
         }
+
+        console.timeEnd('Total Community Detection Time');
 
         return await response.json();
     } catch (error) {
@@ -531,6 +541,7 @@ async function runCommunityDetection(graphData, algorithm) {
         throw error;
     }
 }
+
 
 // Renders a second graph with nodes colored by community
 function renderCommunityGraph(graphData, apiResponse) {

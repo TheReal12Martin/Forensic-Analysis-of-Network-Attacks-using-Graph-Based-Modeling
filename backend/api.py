@@ -237,13 +237,18 @@ async def process_pcap_file(file_path: str, filename: str, max_packets: int):
 @app.post("/api/analyze-communities")
 async def analyze_communities(request: Request):
     try:
+        print('Start API endpoint')
+        start_time = time.perf_counter()
         data = await request.json()
+        print('JSON Request Completed')
+        parse_time = time.perf_counter()
+
         algorithm = data.get('algorithm', 'louvain')
         
         # Validate input data
         if 'nodes' not in data or 'edges' not in data:
             raise HTTPException(status_code=400, detail="Missing required fields: nodes or edges")
-        
+        print('Input Data Validated')
         # Convert to NetworkX graph
         try:
             G = nx.Graph()
@@ -255,25 +260,25 @@ async def analyze_communities(request: Request):
                 G.add_nodes_from(data['nodes'].items())
             
             # Add edges (assuming edges is [[source_indices], [target_indices]])
-            if isinstance(data['edges'], list) and len(data['edges']) == 2:
-                for src_idx, tgt_idx in zip(data['edges'][0], data['edges'][1]):
-                    if src_idx < len(data['nodes']) and tgt_idx < len(data['nodes']):
-                        src = data['nodes'][src_idx]
-                        tgt = data['nodes'][tgt_idx]
-                        G.add_edge(src, tgt)
+            G.add_edges_from(data['edges'])
+
+            graph_build_time = time.perf_counter()
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid graph data: {str(e)}")
         
+        print('NX Graph Created')
         # Run community detection
         result = system['graph_analyzer'].detect_communities(
             {'nodes': list(G.nodes()), 'edges': list(G.edges())},
             algorithm=algorithm
         )
-        
+        detect_time = time.perf_counter()
+        print('Comunities Detected')
         # Calculate metrics on the original partition
         metrics = system['graph_analyzer'].get_community_metrics(
             G, result['partition']
         )
+        print('Comunity Metrics Fetched')
 
         predictions = {node: pred for node, pred in zip(data['nodes'], data.get('predictions', []))}
         
@@ -286,6 +291,16 @@ async def analyze_communities(request: Request):
                 G, result['partition']),
             # Add other detection methods here
         }
+        print('Got Security Insights')
+
+        insights_time = time.perf_counter()
+
+        print(f"[TIMING]")
+        print(f"- Request parse:       {(parse_time - start_time)*1000:.2f} ms")
+        print(f"- Graph build:         {(graph_build_time - parse_time)*1000:.2f} ms")
+        print(f"- Community detection: {(detect_time - graph_build_time)*1000:.2f} ms")
+        print(f"- Insights/metrics:    {(insights_time - detect_time)*1000:.2f} ms")
+        print(f"- Total:               {(insights_time - start_time)*1000:.2f} ms")
         
         return {
             'status': 'success',

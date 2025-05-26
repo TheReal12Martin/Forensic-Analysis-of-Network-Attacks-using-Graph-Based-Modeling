@@ -1,3 +1,4 @@
+from collections import defaultdict
 import networkx as nx
 import numpy as np
 import community as community_louvain
@@ -44,12 +45,6 @@ class GraphAnalyzer:
         print(f"Initial communities: {len(comm_sizes)}")
         print("Top communities:", sorted(comm_sizes.items(), key=lambda x: -x[1])[:5])
         
-        # Merge small communities
-        #small_comms = [comm for comm, size in comm_sizes.items() if size < min_community_size]
-        #if small_comms:
-        #    print(f"Merging {len(small_comms)} small communities")
-        #    partition = self._merge_small_communities(G, partition, small_comms)
-        
         # Recalculate metrics
         result['partition'] = partition
         result['num_communities'] = len(set(partition.values()))
@@ -57,27 +52,6 @@ class GraphAnalyzer:
             result['modularity'] = community_louvain.modularity(partition, G)
         
         return result
-
-    def _merge_small_communities(self, G, partition, small_comms):
-        """Merge small communities with their largest neighbor"""
-        from collections import defaultdict
-        comm_nodes = defaultdict(list)
-        for node, comm in partition.items():
-            comm_nodes[comm].append(node)
-        
-        for small_comm in small_comms:
-            neighbors = set()
-            for node in comm_nodes[small_comm]:
-                neighbors.update(G.neighbors(node))
-            
-            if neighbors:
-                neighbor_comms = [partition[n] for n in neighbors if n in partition]
-                if neighbor_comms:
-                    target_comm = max(set(neighbor_comms), key=neighbor_comms.count)
-                    for node in comm_nodes[small_comm]:
-                        partition[node] = target_comm
-        
-        return partition
 
     def detect_communities_louvain(self, G, resolution=1.0):
         """Improved Louvain with resolution control"""
@@ -234,16 +208,20 @@ class GraphAnalyzer:
     def detect_lateral_movement(self, G, partition):
         """Find nodes connecting different communities"""
         bridge_nodes = []
+        # Compute betweenness once
+        betweenness = nx.betweenness_centrality(G)
+
         for node in G.nodes():
             neighbors = list(G.neighbors(node))
-            if len(neighbors) < 2: continue
+            if len(neighbors) < 2:
+                continue
             
             neighbor_comms = {partition[n] for n in neighbors if n in partition}
             if len(neighbor_comms) > 1:
                 bridge_nodes.append({
                     'node': node,
                     'communities_connected': len(neighbor_comms),
-                    'betweenness': nx.betweenness_centrality(G).get(node, 0)
+                    'betweenness': betweenness.get(node, 0)
                 })
         
         return sorted(bridge_nodes, key=lambda x: -x['betweenness'])
@@ -251,15 +229,20 @@ class GraphAnalyzer:
     def detect_command_control(self, G, partition):
         """Identify star-shaped communities with central nodes"""
         suspicious = []
-        for comm in set(partition.values()):
-            nodes = [n for n in partition if partition[n] == comm]
+        # Pre-group nodes by community
+        comm_nodes = defaultdict(list)
+        for node, comm in partition.items():
+            comm_nodes[comm].append(node)
+
+        for comm, nodes in comm_nodes.items():
+            if len(nodes) < 3:
+                continue
+
             subgraph = G.subgraph(nodes)
-            
-            if len(nodes) < 3: continue
-            
             degrees = dict(subgraph.degree())
             max_degree = max(degrees.values())
-            if max_degree / len(nodes) > 0.8:  # One node connects to most others
+            
+            if max_degree / len(nodes) > 0.8:
                 center = max(degrees.items(), key=lambda x: x[1])[0]
                 suspicious.append({
                     'community': comm,
