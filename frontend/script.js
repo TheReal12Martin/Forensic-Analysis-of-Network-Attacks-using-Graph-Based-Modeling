@@ -348,13 +348,6 @@ async function processPcapFile() {
     });
     resizeObserver.observe(graphContainer);
 
-    function getAttackType(probabilities) {
-        if (!probabilities || probabilities.length < 2) return "Unknown";
-        const types = ["Normal", "DDoS", "Port Scan", "Brute Force", "Malware"];
-        const maxIndex = probabilities.indexOf(Math.max(...probabilities));
-        return types[maxIndex] || "Unknown";
-    }
-
     function inferAttackType(features) {
       const [
         connections, flowCount, internalFlag,
@@ -591,19 +584,22 @@ function renderCommunityGraph(graphData, apiResponse) {
         graphDiv.style.width = '100%';
         graphDiv.style.height = '100%';
         container.appendChild(graphDiv);
-        
+
+        // Initialize graph with CORRECT interaction methods
         const graph = ForceGraph3D()(graphDiv)
             .graphData({ nodes: coloredNodes, links })
             .nodeLabel(node => `${node.id}\nCommunity ${node.community}\n(${communitySizes[node.community]} nodes)`)
             .nodeColor(node => node.color)
             .nodeVal(node => node.size)
-            .linkWidth(1)
+            .linkWidth(1);
+            
 
+        // Handle window resize
         const resizeObserver = new ResizeObserver(() => {
             graph.width(graphDiv.offsetWidth)
                 .height(graphDiv.offsetHeight);
         });
-        resizeObserver.observe(graphDiv);
+        resizeObserver.observe(container);
 
         // Add legend
         addCommunityLegend(legendContainer, uniqueCommunityIds, communitySizes, colorScale);
@@ -635,7 +631,7 @@ function renderCommunityGraph(graphData, apiResponse) {
 function renderSecurityInsights(insights) {
     let html = '';
     
-    // Attack Campaigns
+    
     if (insights.attack_campaigns && Object.keys(insights.attack_campaigns).length) {
         html += `
         <div class="insight-section">
@@ -649,7 +645,7 @@ function renderSecurityInsights(insights) {
         </div>`;
     }
     
-    // Lateral Movement
+    // 3. Lateral Movement (existing)
     if (insights.lateral_movement?.length) {
         html += `
         <div class="insight-section">
@@ -666,7 +662,7 @@ function renderSecurityInsights(insights) {
         </div>`;
     }
     
-    // Command & Control
+    // 4. Command & Control (existing)
     if (insights.command_control?.length) {
         html += `
         <div class="insight-section">

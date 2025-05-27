@@ -258,9 +258,9 @@ progress {
     width: 100%;
     height: 600px;
     background: white;
-    border: 1px solid #ddd;
-    overflow: hidden; /* Crucial for 3D rendering */
-    margin-bottom: 20px;
+    border-radius: 4px;
+    overflow: hidden;
+    touch-action: none;  /* Important for interaction */
 }
 
 #community-graph-container > div {
@@ -269,12 +269,16 @@ progress {
     left: 0;
     width: 100%;
     height: 100%;
+    touch-action: none;  /* Important for interaction */
 }
 
 #community-graph-container canvas {
     display: block;
+    position: absolute;
     width: 100% !important;
     height: 100% !important;
+    touch-action: none;  /* Crucial for interaction */
+    outline: none;       /* Remove focus outline */
 }
 
 .loading {
@@ -372,4 +376,60 @@ progress {
     justify-content: space-between;
     padding: 4px 0;
     font-size: 13px;
+}
+
+.critical-section {
+    border-left: 4px solid #ff0000;
+    background-color: #fff0f0;
+}
+
+.critical-warning {
+    color: #d32f2f;
+    font-weight: bold;
+}
+
+.critical-node {
+    border-left: 3px solid #ff0000;
+    padding: 8px;
+    margin: 5px 0;
+    background-color: #ffebee;
+}
+
+.node-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 5px;
+}
+
+.node-name {
+    font-weight: bold;
+}
+
+.danger-level {
+    color: #ffffff;
+    background-color: #d32f2f;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.8em;
+}
+
+.node-details {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.9em;
+    color: #555;
+    margin-bottom: 3px;
+}
+
+.connected-communities {
+    font-size: 0.85em;
+    color: #777;
+}
+
+.more-items {
+    color: #666;
+    font-style: italic;
+    text-align: center;
+    padding: 5px;
+    font-size: 0.9em;
 }

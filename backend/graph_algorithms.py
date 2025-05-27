@@ -225,6 +225,7 @@ class GraphAnalyzer:
                 })
         
         return sorted(bridge_nodes, key=lambda x: -x['betweenness'])
+    
 
     def detect_command_control(self, G, partition):
         """Identify star-shaped communities with central nodes"""
