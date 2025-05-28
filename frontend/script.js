@@ -540,9 +540,9 @@ async function runCommunityDetection(graphData, algorithm) {
 function renderCommunityGraph(graphData, apiResponse) {
     const container = document.getElementById('community-graph-container');
     const legendContainer = document.getElementById('community-legend');
-    container.innerHTML = ''; // Clear previous content
+    container.innerHTML = '';
     legendContainer.innerHTML = '';
-    
+
     try {
         // Validate input data
         if (!apiResponse?.communities || !graphData?.nodes) {
@@ -552,11 +552,11 @@ function renderCommunityGraph(graphData, apiResponse) {
         // Get all unique community IDs
         const communityIds = Object.values(apiResponse.communities);
         const uniqueCommunityIds = [...new Set(communityIds)];
-        
-        // Create a stable color scale
+
+        // Create color scale
         const colorScale = d3.scaleOrdinal()
-            .domain(uniqueCommunityIds.sort((a, b) => a - b)) // Sort for consistent colors
-            .range(d3.schemeTableau10); // Using a more robust color scheme
+            .domain(uniqueCommunityIds.sort((a, b) => a - b))
+            .range(d3.schemeTableau10);
 
         // Count community sizes
         const communitySizes = {};
@@ -585,14 +585,52 @@ function renderCommunityGraph(graphData, apiResponse) {
         graphDiv.style.height = '100%';
         container.appendChild(graphDiv);
 
-        // Initialize graph with CORRECT interaction methods
+        // ✅ FIX: Use global THREE
+        const THREE = window.THREE;
+        if (!THREE) throw new Error("THREE.js is not loaded correctly.");
+
+        // Initialize the graph
         const graph = ForceGraph3D()(graphDiv)
-            .graphData({ nodes: coloredNodes, links })
-            .nodeLabel(node => `${node.id}\nCommunity ${node.community}\n(${communitySizes[node.community]} nodes)`)
-            .nodeColor(node => node.color)
-            .nodeVal(node => node.size)
-            .linkWidth(1);
+        .graphData({ nodes: coloredNodes, links })
+        .nodeLabel(node => `${node.id}\nCommunity ${node.community}\nType: ${node.group ? 'ATTACK' : 'Normal'}`)
+        .nodeColor(node => node.color) // Community color
+        .nodeVal(node => node.size)
+        .nodeThreeObject(node => {
+            const group = new THREE.Group();
             
+            // Main node with community color
+            const sphere = new THREE.Mesh(
+                new THREE.SphereGeometry(node.size),
+                new THREE.MeshPhongMaterial({
+                    color: new THREE.Color(node.color),
+                    transparent: true,
+                    opacity: 0.8
+                })
+            );
+            group.add(sphere);
+            
+            // Add red ring for malicious nodes
+            if (node.group) {
+                const ring = new THREE.Mesh(
+                    new THREE.TorusGeometry(node.size * 1.1, node.size * 0.1, 16, 32),
+                    new THREE.MeshBasicMaterial({ color: 0xff0000 })
+                );
+                ring.rotation.x = Math.PI / 2;
+                group.add(ring);
+            }
+            
+            return group;
+        })
+        .linkWidth(1);
+
+        graph.onEngineTick(() => {
+            graph.graphData().nodes.forEach(node => {
+                if (node.group && node.__threeObj) {
+                    const scale = 1 + 0.1 * Math.sin(Date.now() * 0.005);
+                    node.__threeObj.scale.set(scale, scale, scale);
+                }
+            });
+        });
 
         // Handle window resize
         const resizeObserver = new ResizeObserver(() => {
@@ -607,15 +645,16 @@ function renderCommunityGraph(graphData, apiResponse) {
         // Update metrics display
         updateCommunityMetrics(apiResponse, communitySizes, graphData.nodes.length);
 
+        // Add security insights if available
         if (apiResponse.security_insights) {
-        const insightsEl = document.createElement('div');
-        insightsEl.className = 'security-insights';
-        insightsEl.innerHTML = `
-            <h4>Security Insights</h4>
-            ${renderSecurityInsights(apiResponse.security_insights)}
-        `;
-        legendContainer.appendChild(insightsEl);
-    }
+            const insightsEl = document.createElement('div');
+            insightsEl.className = 'security-insights';
+            insightsEl.innerHTML = `
+                <h4>Security Insights</h4>
+                ${renderSecurityInsights(apiResponse.security_insights)}
+            `;
+            legendContainer.appendChild(insightsEl);
+        }
 
     } catch (error) {
         console.error("Graph rendering failed:", error);
@@ -627,6 +666,9 @@ function renderCommunityGraph(graphData, apiResponse) {
         `;
     }
 }
+
+
+
 
 function renderSecurityInsights(insights) {
     let html = '';
