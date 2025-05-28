@@ -34,24 +34,30 @@
         </div>
         
         <div id="graph-container"></div>
-            <div id="community-analysis-section" style="display: none; margin-top: 20px;">
-                <h3>Community Analysis</h3>
-                <div style="margin-bottom: 15px;">
-                    <label for="community-algorithm">Algorithm:</label>
-                    <select id="community-algorithm">
-                        <option value="louvain">Louvain</option>
-                        <option value="spectral">Spectral</option>
-                    </select>
-                    
-                    <button id="run-community-analysis" class="process-btn">Analyze Communities</button>
-                </div>
-                <div id="community-results" style="display: none; margin-top: 20px;">
-                    <div id="community-metrics"></div>
-                    <div id="community-graph-container" style="width: 100%; height: 600px;"></div>
-                    <div id="community-legend"></div>
-                </div>
+        <div id="malicious-nodes-section" class="results-section" style="display: none; margin-top: 20px;">
+                <h3>Malicious Nodes Detected</h3>
+            <div id="malicious-nodes-list" class="node-list"></div>
+        <div id="community-analysis-section" style="display: none; margin-top: 20px;">
+            <h3>Community Analysis</h3>
+            <div style="margin-bottom: 15px;">
+                <label for="community-algorithm">Algorithm:</label>
+                <select id="community-algorithm">
+                    <option value="louvain">Louvain</option>
+                    <option value="spectral">Spectral</option>
+                </select>
+                
+                <button id="run-community-analysis" class="process-btn">Analyze Communities</button>
             </div>
+            <div id="community-results" style="display: none; margin-top: 20px;">
+                <div id="community-metrics"></div>
+                <div id="community-graph-container" style="width: 100%; height: 600px;"></div>
+                <div id="community-legend"></div>
+            </div>
+        </div>
+        
         <div id="results-summary"></div>
+            
+        </div>
     </div>
 </body>
 </html>

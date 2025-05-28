@@ -221,6 +221,7 @@ async function processPcapFile() {
         document.body.appendChild(popup);
     }
 
+
     // Prepare data with all needed properties
     const nodes = results.nodes.map((node, i) => ({
         id: node,
@@ -247,7 +248,7 @@ async function processPcapFile() {
     graphInstance = ForceGraph3D()(graphDiv)
         .graphData({ nodes, links })
         .nodeLabel(node => `${node.id}\nType: ${node.group ? 'ATTACK' : 'Normal'}`)
-        .nodeColor(node => node.group ? '#ff3333' : '#00cc00')
+        .nodeColor(node => node.group ? 'hsl(0, 100%, 50%)' : 'hsl(120, 100%, 40%)')
         .nodeVal(node => node.group ? 2 : 1) // Make attack nodes slightly larger
         .onNodeClick((node, event) => {
           // Get connected nodes - fixed implementation
@@ -348,7 +349,9 @@ async function processPcapFile() {
     });
     resizeObserver.observe(graphContainer);
 
-    function inferAttackType(features) {
+}
+
+function inferAttackType(features) {
       const [
         connections, flowCount, internalFlag,
         pktRate, timeRange,
@@ -416,6 +419,93 @@ async function processPcapFile() {
       
       return indicators;
   }
+
+  function showMaliciousNodesList(results) {
+  const maliciousNodesList = document.getElementById('malicious-nodes-list');
+  const maliciousNodesSection = document.getElementById('malicious-nodes-section');
+  
+  if (!results || !results.nodes || !results.predictions) {
+    maliciousNodesSection.style.display = 'none';
+    return;
+  }
+
+  // Get all malicious nodes with their details
+  const maliciousNodes = results.nodes
+    .map((node, i) => ({
+      id: node,
+      confidence: Math.max(...results.probabilities[i]),
+      probabilities: results.probabilities[i],
+      features: results.features ? results.features[i] : null
+    }))
+    .filter((_, i) => results.predictions[i] === 1); // Filter for malicious nodes (group=1)
+
+  if (maliciousNodes.length === 0) {
+    maliciousNodesList.innerHTML = '<p>No malicious nodes detected.</p>';
+    maliciousNodesSection.style.display = 'block';
+    return;
+  }
+
+  // Sort by confidence (highest first)
+  maliciousNodes.sort((a, b) => b.confidence - a.confidence);
+
+  // Create the list HTML
+  maliciousNodesList.innerHTML = `
+    <div class="list-header">
+      <span>Node ID</span>
+      <span>Confidence</span>
+      <span>Threat Level</span>
+      <span>Attack Type</span>
+    </div>
+    <div class="node-list-items">
+      ${maliciousNodes.map(node => `
+        <div class="node-item" data-node-id="${node.id}">
+          <span class="node-id">${node.id}</span>
+          <span class="confidence">${(node.confidence * 100).toFixed(1)}%</span>
+          <span class="threat-level ${getThreatLevelClass(node.confidence)}">
+            ${getThreatLevel(node.confidence)}
+          </span>
+          <span class="attack-type">${node.features ? inferAttackType(node.features) : 'Unknown'}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  // Add click handlers to focus on the node in the graph
+  document.querySelectorAll('.node-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const nodeId = item.getAttribute('data-node-id');
+      focusOnNode(nodeId);
+    });
+  });
+
+  maliciousNodesSection.style.display = 'block';
+}
+
+function getThreatLevelClass(confidence) {
+  if (confidence > 0.9) return "critical";
+  if (confidence > 0.7) return "high";
+  if (confidence > 0.5) return "medium";
+  return "low";
+}
+
+function focusOnNode(nodeId) {
+  if (!graphInstance) return;
+  
+  const node = graphInstance.graphData().nodes.find(n => n.id === nodeId);
+  if (node) {
+    // Calculate distance based on node importance
+    const distance = 100 + (node.group ? 50 : 0);
+    
+    // Focus on the node
+    graphInstance.centerAt(node.x, node.y, node.z, 1000);
+    graphInstance.zoom(distance, 1000);
+    
+    // Highlight the node
+    const nodeObj = graphInstance.getGraphBbox(nodeId);
+    if (nodeObj) {
+      // You could add additional highlighting here if needed
+    }
+  }
 }
 
 
@@ -435,6 +525,7 @@ async function processPcapFile() {
         <p><strong>Packet Limit:</strong> ${maxPackets}</p>
         <p><strong>Attacks Detected:</strong> ${data.meta.attack_count}</p>
     `;
+    showMaliciousNodesList(data)
   }
 
   function formatFileSize(bytes) {
@@ -507,7 +598,6 @@ async function runCommunityDetection(graphData, algorithm) {
             nodes: nodes,
             edges: edges,
             predictions: graphData.nodes.map(n => n.group),
-            //probabilities: graphData.nodes.map(n => n.probabilities)
         };
         console.timeEnd('Step 4: Preparing payload');
 
@@ -555,8 +645,8 @@ function renderCommunityGraph(graphData, apiResponse) {
 
         // Create color scale
         const colorScale = d3.scaleOrdinal()
-            .domain(uniqueCommunityIds.sort((a, b) => a - b))
-            .range(d3.schemeTableau10);
+            .domain(uniqueCommunityIds)
+            .range(uniqueCommunityIds.map((_, i) => `hsl(${(i * 137.5) % 360}, 100%, 50%)`));
 
         // Count community sizes
         const communitySizes = {};
@@ -613,7 +703,7 @@ function renderCommunityGraph(graphData, apiResponse) {
             if (node.group) {
                 const ring = new THREE.Mesh(
                     new THREE.TorusGeometry(node.size * 1.1, node.size * 0.1, 16, 32),
-                    new THREE.MeshBasicMaterial({ color: 0xff0000 })
+                    new THREE.MeshPhongMaterial({ color: 'hsl(0, 100%, 50%)', shininess: 50 })
                 );
                 ring.rotation.x = Math.PI / 2;
                 group.add(ring);

@@ -433,3 +433,80 @@ progress {
     padding: 5px;
     font-size: 0.9em;
 }
+
+/* Malicious Nodes List Styles */
+#malicious-nodes-section {
+    background-color: #fff;
+    border-radius: 8px;
+    padding: 15px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+#malicious-nodes-list {
+    max-height: 400px;
+    overflow-y: auto;
+    border: 1px solid #eee;
+    border-radius: 4px;
+    margin-top: 10px;
+}
+
+.node-list .list-header {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 2fr;
+    padding: 8px 12px;
+    background-color: #f5f5f5;
+    font-weight: bold;
+    border-bottom: 1px solid #ddd;
+    position: sticky;
+    top: 0;
+}
+
+.node-list .node-list-items {
+    display: contents;
+}
+
+.node-list .node-item {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 2fr;
+    padding: 8px 12px;
+    border-bottom: 1px solid #eee;
+    cursor: pointer;
+}
+
+.node-list .node-item:hover {
+    background-color: #f9f9f9;
+}
+
+.node-list .node-item:last-child {
+    border-bottom: none;
+}
+
+.node-list .confidence {
+    text-align: right;
+    padding-right: 10px;
+}
+
+.node-list .threat-level {
+    font-weight: bold;
+}
+
+.node-list .threat-level.critical {
+    color: #d32f2f;
+}
+
+.node-list .threat-level.high {
+    color: #f57c00;
+}
+
+.node-list .threat-level.medium {
+    color: #fbc02d;
+}
+
+.node-list .threat-level.low {
+    color: #388e3c;
+}
+
+.node-list .attack-type {
+    font-family: monospace;
+    font-size: 0.9em;
+}
