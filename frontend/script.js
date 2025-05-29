@@ -250,6 +250,7 @@ async function processPcapFile() {
         .nodeLabel(node => `${node.id}\nType: ${node.group ? 'ATTACK' : 'Normal'}`)
         .nodeColor(node => node.group ? 'hsl(0, 100%, 50%)' : 'hsl(120, 100%, 40%)')
         .nodeVal(node => node.group ? 2 : 1) // Make attack nodes slightly larger
+        .linkWidth(0.75)
         .onNodeClick((node, event) => {
           // Get connected nodes - fixed implementation
           const connectedNodes = new Set();
@@ -711,7 +712,56 @@ function renderCommunityGraph(graphData, apiResponse) {
             
             return group;
         })
-        .linkWidth(1);
+        .linkWidth(0.75);
+
+        console.log('Graph initialized, configuring controls...'); // Debug 5
+        
+        // Explicit control configuration
+        if (graph.controls()) {
+            console.log('Controls found, configuring...');
+            const controls = graph.controls();
+            
+            // For newer versions of Three.js/ForceGraph, use these properties:
+            controls.rotateSpeed = 1.0;
+            controls.zoomSpeed = 1.2;
+            controls.panSpeed = 0.8;
+            
+            // These are the correct property names for OrbitControls
+            controls.enableRotate = true;    // Rotation
+            controls.enableZoom = true;      // Zoom
+            controls.enablePan = true;       // Panning
+            
+            // Additional settings for better control
+            controls.screenSpacePanning = true;
+            controls.dampingFactor = 0.25;
+            
+            console.log('Updated control properties:', {
+                enableRotate: controls.enableRotate,
+                enableZoom: controls.enableZoom,
+                enablePan: controls.enablePan,
+                rotateSpeed: controls.rotateSpeed
+            });
+        } else {
+            console.warn('No controls found on graph instance!'); // Debug 8
+        }
+
+
+        // Force controls update
+        setTimeout(() => {
+            if (graph.controls()) {
+                // Dispose old controls
+                graph.controls().dispose();
+                
+                // Create new OrbitControls
+                const newControls = new THREE.OrbitControls(graph.camera(), graph.renderer().domElement);
+                newControls.enableRotate = true;
+                newControls.enableZoom = true;
+                newControls.enablePan = true;
+                
+                // Replace controls
+                graph._controls = newControls;
+            }
+        }, 100);
 
         graph.onEngineTick(() => {
             graph.graphData().nodes.forEach(node => {
