@@ -6,8 +6,6 @@
         <title>Network Attack Detection System</title>
         <link rel="stylesheet" href="/static/styles.css">
         <script src="https://unpkg.com/d3"></script>
-        <script src="https://unpkg.com/three@0.132.2/build/three.min.js"></script>
-        <script src="https://unpkg.com/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
         <script src="https://unpkg.com/3d-force-graph"></script>
         <script src="/static/script.js" defer></script>
     </head>
@@ -34,10 +32,13 @@
             </div>
         </div>
         
-        <div id="graph-container"></div>
+        <div id="graph-container" class="graph-viewport"></div>
+        
         <div id="malicious-nodes-section" class="results-section" style="display: none; margin-top: 20px;">
-                <h3>Malicious Nodes Detected</h3>
+            <h3>Malicious Nodes Detected</h3>
             <div id="malicious-nodes-list" class="node-list"></div>
+        </div>
+        
         <div id="community-analysis-section" style="display: none; margin-top: 20px;">
             <h3>Community Analysis</h3>
             <div style="margin-bottom: 15px;">
@@ -51,14 +52,11 @@
             </div>
             <div id="community-results" style="display: none; margin-top: 20px;">
                 <div id="community-metrics"></div>
-                <div id="community-graph-container" style="width: 100%; height: 600px;"></div>
                 <div id="community-legend"></div>
             </div>
         </div>
         
         <div id="results-summary"></div>
-            
-        </div>
     </div>
 </body>
 </html>

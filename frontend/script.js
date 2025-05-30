@@ -1,4 +1,15 @@
 document.addEventListener('DOMContentLoaded', () => {
+  // Global state variables
+  let currentGraphMode = 'main'; // 'main' or 'community'
+  let mainGraphInstance = null;
+  let communityGraphInstance = null;
+  let mainGraphData = null;
+  let communityGraphData = null;
+  let selectedFile = null;
+  let resizeObserver = null;
+  let activeUploads = new Set();
+  let currentFileId = null;
+
   // DOM elements
   const fileInput = document.getElementById('file-input');
   const processBtn = document.getElementById('process-btn');
@@ -6,16 +17,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const progressBar = document.getElementById('progress-bar');
   const progressText = document.getElementById('progress-text');
   const resultsSummary = document.getElementById('results-summary');
-  let graphContainer = document.getElementById('graph-container');
+  const graphContainer = document.getElementById('graph-container');
   
-  // State
-  let selectedFile = null;
-  let graphInstance = null;
-  let resizeObserver = null;
-  let activeUploads = new Set();
-  let currentFileId = null;
-  
-  // Create popup elements
+  // Create popup element
   const popup = document.createElement('div');
   popup.id = 'node-popup';
   popup.style.position = 'absolute';
@@ -29,10 +33,12 @@ document.addEventListener('DOMContentLoaded', () => {
   popup.style.maxWidth = '300px';
   document.body.appendChild(popup);
 
+  // Initialize the UI
+  addViewToggleButtons();
+
   // Event listeners
   fileInput.addEventListener('change', handleFileSelect);
   processBtn.addEventListener('click', processPcapFile);
-
   document.getElementById('max-packets').addEventListener('change', function() {
     const value = parseInt(this.value);
     if (value < 1000) {
@@ -40,10 +46,10 @@ document.addEventListener('DOMContentLoaded', () => {
         alert('Minimum packet limit is 1000');
     }
   });
+  document.getElementById('run-community-analysis').addEventListener('click', runCommunityAnalysis);
 
   // 1. File selection handler
   function handleFileSelect(event) {
-    // Cancel any active uploads
     activeUploads.forEach(xhr => xhr.abort());
     activeUploads.clear();
     
@@ -58,14 +64,14 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // 2. Process PCAP file with chunked upload
-async function processPcapFile() {
+  async function processPcapFile() {
     clearPreviousGraph();
     updateProgress('Initializing...', 0);
     
     try {
         if (!selectedFile) throw new Error('No file selected');
 
-        const chunkSize = 500 * 1024 * 1024; // 5MB chunks (smaller for better progress tracking)
+        const chunkSize = 500 * 1024 * 1024;
         const totalChunks = Math.ceil(selectedFile.size / chunkSize);
         const maxPackets = document.getElementById('max-packets').value;
         currentFileId = uuidv4();
@@ -102,7 +108,7 @@ async function processPcapFile() {
                 } catch (error) {
                     retries--;
                     if (retries === 0) throw error;
-                    await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retry
+                    await new Promise(resolve => setTimeout(resolve, 1000));
                 }
             }
         }
@@ -129,14 +135,12 @@ async function processPcapFile() {
         showResults(results);
         initVisualization(results);
         updateProgress('Analysis complete!', 100);
-        setCommunityGraphData(results);
     } catch (error) {
         handleError(error);
     } finally {
         processBtn.disabled = false;
     }
-}
-
+  }
 
 
   function handleError(error) {
@@ -167,27 +171,24 @@ async function processPcapFile() {
   }
 
   function clearPreviousGraph() {
-    if (graphInstance) {
-      try {
-        graphInstance.pauseAnimation();
-        const renderer = graphInstance.renderer();
-        if (renderer) {
-          renderer.dispose();
-          if (renderer.domElement.parentNode) {
-            renderer.domElement.parentNode.removeChild(renderer.domElement);
-          }
-        }
-      } catch (e) {
-        console.warn('Error cleaning up graph:', e);
+    if (mainGraphInstance) {
+      mainGraphInstance.pauseAnimation();
+      const renderer = mainGraphInstance.renderer();
+      if (renderer && renderer.domElement.parentNode) {
+        renderer.domElement.parentNode.removeChild(renderer.domElement);
+      }
+    }
+    if (communityGraphInstance) {
+      communityGraphInstance.pauseAnimation();
+      const renderer = communityGraphInstance.renderer();
+      if (renderer && renderer.domElement.parentNode) {
+        renderer.domElement.parentNode.removeChild(renderer.domElement);
       }
     }
 
-    const newContainer = document.createElement('div');
-    newContainer.id = 'graph-container';
-    newContainer.style.width = '100%';
-    newContainer.style.height = '600px';
-    graphContainer.replaceWith(newContainer);
-    graphContainer = newContainer;
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+    }
   }
 
   function updateProgress(message, percent) {
@@ -211,148 +212,234 @@ async function processPcapFile() {
     });
   }
 
-  // 4. GRAPH INITIALIZATION with popup support
+  // 3. GRAPH VISUALIZATION
   function initVisualization(results) {
-    // Create popup element if it doesn't exist
-    let popup = document.getElementById('node-popup');
-    if (!popup) {
-        popup = document.createElement('div');
-        popup.id = 'node-popup';
-        document.body.appendChild(popup);
-    }
+    // Store main graph data
+    mainGraphData = {
+        nodes: results.nodes.map((node, i) => ({
+            id: node,
+            group: results.predictions[i],
+            confidence: Math.max(...results.probabilities[i]),
+            probabilities: results.probabilities[i],
+            index: i,
+            features: results.features ? results.features[i] : null
+        })),
+        links: results.edges[0].map((srcIdx, i) => ({
+            source: results.nodes[srcIdx],
+            target: results.nodes[results.edges[1][i]],
+            value: 1
+        }))
+    };
 
+    // Also store for potential community analysis
+    communityGraphData = { 
+        nodes: [...mainGraphData.nodes],
+        links: [...mainGraphData.links]
+    };
 
-    // Prepare data with all needed properties
-    const nodes = results.nodes.map((node, i) => ({
-        id: node,
-        group: results.predictions[i],
-        confidence: Math.max(...results.probabilities[i]),
-        probabilities: results.probabilities[i],
-        index: i,
-        features: results.features ? results.features[i] : null
-    }));
+    // Render the main graph
+    currentGraphMode = 'main';
+    renderCurrentGraph();
+    
+    // Show community analysis section
+    document.getElementById('community-analysis-section').style.display = 'block';
+  }
 
-    const links = results.edges[0].map((srcIdx, i) => ({
-        source: results.nodes[srcIdx],
-        target: results.nodes[results.edges[1][i]],
-        value: 1
-    }));
+  function renderCurrentGraph() {
+    const container = document.getElementById('graph-container');
+    container.innerHTML = ''; // Clear previous graph
 
-    // Create fresh container
     const graphDiv = document.createElement('div');
     graphDiv.style.width = '100%';
     graphDiv.style.height = '100%';
-    graphContainer.appendChild(graphDiv);
+    container.appendChild(graphDiv);
 
-    // Initialize graph with enhanced click handler
-    graphInstance = ForceGraph3D()(graphDiv)
-        .graphData({ nodes, links })
-        .nodeLabel(node => `${node.id}\nType: ${node.group ? 'ATTACK' : 'Normal'}`)
-        .nodeColor(node => node.group ? 'hsl(0, 100%, 50%)' : 'hsl(120, 100%, 40%)')
-        .nodeVal(node => node.group ? 2 : 1) // Make attack nodes slightly larger
-        .linkWidth(0.75)
-        .onNodeClick((node, event) => {
-          // Get connected nodes - fixed implementation
-          const connectedNodes = new Set();
-          links.forEach(link => {
-              if (link.source === node.id || link.source.id === node.id) {
-                  connectedNodes.add(link.target.id || link.target);
-              }
-              if (link.target === node.id || link.target.id === node.id) {
-                  connectedNodes.add(link.source.id || link.source);
-              }
-          });
+    // Defer graph initialization to ensure graphDiv has dimensions
+    requestAnimationFrame(() => {
+        const initialWidth = graphDiv.offsetWidth;
+        const initialHeight = graphDiv.offsetHeight;
 
-          // Get the original node data
-          const nodeIndex = results.nodes.indexOf(node.id);
-          const probabilities = results.probabilities[nodeIndex];
-          const features = results.features ? results.features[nodeIndex] : null;
-
-          // Create enhanced popup content
-          popup.innerHTML = `
-              <h3 style="color: ${node.group ? '#ff3333' : '#00cc00'}; margin-top: 0;">
-                  ${node.id}
-              </h3>
-              <p><strong>Type:</strong> <span style="color: ${node.group ? '#ff3333' : '#00cc00'}">${node.group ? 'ATTACK' : 'Normal'}</span></p>
-              <p><strong>Confidence:</strong> ${(node.confidence * 100).toFixed(1)}%</p>
-              <p><strong>Connections:</strong> ${connectedNodes.size} nodes</p>
-              
-              ${node.group ? `
-              <div style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
-                  <h4 style="margin-bottom: 5px;">Attack Details</h4>
-                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 13px;">
-                      <div><strong>Attack Type:</strong> ${inferAttackType(features)}</div>
-                      <div><strong>Threat Level:</strong> ${getThreatLevel(node.confidence)}</div>
-                      <div><strong>Behavior Pattern:</strong> ${getBehaviorPattern(features)}</div>
-                      <div><strong>Risk Score:</strong> ${Math.round(node.confidence * 100)}/100</div>
-                  </div>
-                  
-                  <div style="margin-top: 10px;">
-                      <h4 style="margin-bottom: 5px;">Attack Indicators</h4>
-                      <ul style="margin-top: 5px; padding-left: 20px;">
-                          ${getAttackIndicators(probabilities, features).join('')}
-                      </ul>
-                  </div>
-              </div>
-              ` : ''}
-              
-              ${connectedNodes.size > 0 ? `
-              <div style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
-                  <h4 style="margin-bottom: 5px;">Connected Nodes</h4>
-                  <div style="max-height: 100px; overflow-y: auto; background: #f5f5f5; padding: 5px; border-radius: 4px;">
-                      ${Array.from(connectedNodes).slice(0, 10).map(n => `<div>${n}</div>`).join('')}
-                      ${connectedNodes.size > 10 ? `<div>+ ${connectedNodes.size - 10} more...</div>` : ''}
-                  </div>
-              </div>
-              ` : ''}
-              
-              ${features ? `
-              <div style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
-                  <h4 style="margin-bottom: 5px;">Network Metrics</h4>
-                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 13px;">
-                      <div><strong>Connections:</strong> ${Math.round(features[0] * 1000)}</div>
-                      <div><strong>Packet Rate:</strong> ${(features[3] * 100).toFixed(1)}/s</div>
-                      <div><strong>Avg Size:</strong> ${Math.round(features[5] * 1500)}B</div>
-                      <div><strong>SYN Ratio:</strong> ${(features[8] * 100).toFixed(1)}%</div>
-                      <div><strong>RST Ratio:</strong> ${(features[9] * 100).toFixed(1)}%</div>
-                      <div><strong>Duration:</strong> ${(features[2] * 60).toFixed(1)}s</div>
-                  </div>
-              </div>
-              ` : ''}
-              
-              <button onclick="this.parentElement.style.display='none'" 
-                      style="margin-top: 15px; width: 100%; padding: 8px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                  Close
-              </button>
-          `;
-          
-          // Position and show popup
-          popup.style.display = 'block';
-          popup.style.left = `${Math.min(event.clientX + 15, window.innerWidth - 350)}px`;
-          popup.style.top = `${Math.min(event.clientY + 15, window.innerHeight - 400)}px`;
-          
-          event.stopPropagation();
-      })
-
-    // Close popup when clicking elsewhere
-    document.addEventListener('click', (e) => {
-        if (e.target !== popup && !popup.contains(e.target)) {
-            popup.style.display = 'none';
+        // If dimensions are still zero, it indicates a layout issue with 'graph-container'
+        // or that 'graph-container' is hidden. For now, we'll proceed,
+        // but in a production scenario, you might want to add a retry or error handling.
+        if (initialWidth === 0 || initialHeight === 0) {
+            console.warn("Graph container (graphDiv) has zero dimensions during initialization. Graph may not render correctly.");
+            // Optionally, you could try to wait a bit more, e.g., with another setTimeout, or simply proceed.
         }
-    });
 
-    // Handle window resize
-    resizeObserver = new ResizeObserver(() => {
-        if (graphInstance) {
-            graphInstance.width(graphContainer.offsetWidth)
-                       .height(graphContainer.offsetHeight);
+        const data = currentGraphMode === 'main' ? mainGraphData : communityGraphData;
+
+        if (!data || !data.nodes || !data.links) {
+            console.error('Graph data is invalid for mode:', currentGraphMode);
+            return;
         }
-    });
-    resizeObserver.observe(graphContainer);
 
+        if (currentGraphMode === 'main') {
+            if (communityGraphInstance) {
+                // Consider pausing or cleaning up the other instance if it exists
+                // communityGraphInstance.pauseAnimation();
+                // communityGraphInstance._destructor?.(); // If library supports explicit destruction
+                communityGraphInstance = null; 
+            }
+            mainGraphInstance = ForceGraph3D()(graphDiv)
+                .width(initialWidth)
+                .height(initialHeight)
+                .graphData(data)
+                .nodeLabel(node => `${node.id}\nType: ${node.group ? 'ATTACK' : 'Normal'}`)
+                .nodeColor(node => node.group ? '#ff3333' : '#00cc00')
+                .linkWidth(0.75)
+                .onNodeClick(handleNodeClick);
+        } else { // community mode
+            if (mainGraphInstance) {
+                // mainGraphInstance.pauseAnimation();
+                // mainGraphInstance._destructor?.();
+                mainGraphInstance = null;
+            }
+            communityGraphInstance = ForceGraph3D()(graphDiv)
+                .width(initialWidth)
+                .height(initialHeight)
+                .graphData(data)
+                .nodeLabel(node => `${node.id}\nCommunity ${node.community}\nType: ${node.group ? 'ATTACK' : 'Normal'}`)
+                .nodeColor(node => node.color) // Make sure node.color is a valid color string
+                .linkWidth(0.75)
+                .onNodeClick(handleNodeClick);
+        }
+
+        // Adjust ResizeObserver to use graphDiv and the correct current instance
+        if (resizeObserver) {
+            resizeObserver.disconnect(); // Disconnect previous observer
+        }
+        resizeObserver = new ResizeObserver(() => {
+            const currentInstance = (currentGraphMode === 'main') ? mainGraphInstance : communityGraphInstance;
+            if (currentInstance && graphDiv.offsetWidth > 0 && graphDiv.offsetHeight > 0) {
+                currentInstance.width(graphDiv.offsetWidth)
+                               .height(graphDiv.offsetHeight);
+            }
+        });
+        resizeObserver.observe(graphDiv); // Observe the graphDiv itself
+    });
 }
 
-function inferAttackType(features) {
+  function handleNodeClick(node, event) {
+    // Get connected nodes
+    const connectedNodes = new Set();
+    const links = currentGraphMode === 'main' ? mainGraphData.links : communityGraphData.links;
+    
+    links.forEach(link => {
+        if (link.source === node.id || link.source.id === node.id) {
+            connectedNodes.add(link.target.id || link.target);
+        }
+        if (link.target === node.id || link.target.id === node.id) {
+            connectedNodes.add(link.source.id || link.source);
+        }
+    });
+
+    // Create popup content
+    popup.innerHTML = `
+        <h3 style="color: ${node.group ? '#ff3333' : '#00cc00'}; margin-top: 0;">
+            ${node.id}
+        </h3>
+        <p><strong>Type:</strong> <span style="color: ${node.group ? '#ff3333' : '#00cc00'}">${node.group ? 'ATTACK' : 'Normal'}</span></p>
+        <p><strong>Confidence:</strong> ${(node.confidence * 100).toFixed(1)}%</p>
+        <p><strong>Connections:</strong> ${connectedNodes.size} nodes</p>
+        
+        ${node.group ? `
+        <div style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
+            <h4 style="margin-bottom: 5px;">Attack Details</h4>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 13px;">
+                <div><strong>Attack Type:</strong> ${inferAttackType(node.features)}</div>
+                <div><strong>Threat Level:</strong> ${getThreatLevel(node.confidence)}</div>
+                <div><strong>Behavior Pattern:</strong> ${getBehaviorPattern(node.features)}</div>
+                <div><strong>Risk Score:</strong> ${Math.round(node.confidence * 100)}/100</div>
+            </div>
+            
+            <div style="margin-top: 10px;">
+                <h4 style="margin-bottom: 5px;">Attack Indicators</h4>
+                <ul style="margin-top: 5px; padding-left: 20px;">
+                    ${getAttackIndicators(node.probabilities, node.features).join('')}
+                </ul>
+            </div>
+        </div>
+        ` : ''}
+        
+        ${connectedNodes.size > 0 ? `
+        <div style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
+            <h4 style="margin-bottom: 5px;">Connected Nodes</h4>
+            <div style="max-height: 100px; overflow-y: auto; background: #f5f5f5; padding: 5px; border-radius: 4px;">
+                ${Array.from(connectedNodes).slice(0, 10).map(n => `<div>${n}</div>`).join('')}
+                ${connectedNodes.size > 10 ? `<div>+ ${connectedNodes.size - 10} more...</div>` : ''}
+            </div>
+        </div>
+        ` : ''}
+        
+        ${node.features ? `
+        <div style="margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
+            <h4 style="margin-bottom: 5px;">Network Metrics</h4>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 13px;">
+                <div><strong>Connections:</strong> ${Math.round(node.features[0] * 1000)}</div>
+                <div><strong>Packet Rate:</strong> ${(node.features[3] * 100).toFixed(1)}/s</div>
+                <div><strong>Avg Size:</strong> ${Math.round(node.features[5] * 1500)}B</div>
+                <div><strong>SYN Ratio:</strong> ${(node.features[8] * 100).toFixed(1)}%</div>
+                <div><strong>RST Ratio:</strong> ${(node.features[9] * 100).toFixed(1)}%</div>
+                <div><strong>Duration:</strong> ${(node.features[2] * 60).toFixed(1)}s</div>
+            </div>
+        </div>
+        ` : ''}
+        
+        <button onclick="this.parentElement.style.display='none'" 
+                style="margin-top: 15px; width: 100%; padding: 8px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;">
+            Close
+        </button>
+    `;
+    
+    // Position and show popup
+    popup.style.display = 'block';
+    popup.style.left = `${Math.min(event.clientX + 15, window.innerWidth - 350)}px`;
+    popup.style.top = `${Math.min(event.clientY + 15, window.innerHeight - 400)}px`;
+    
+    event.stopPropagation();
+  }
+
+  // Add view toggle buttons
+  function addViewToggleButtons() {
+    const container = document.getElementById('graph-container');
+    
+    const buttonContainer = document.createElement('div');
+    buttonContainer.style.position = 'absolute';
+    buttonContainer.style.top = '10px';
+    buttonContainer.style.right = '10px';
+    buttonContainer.style.zIndex = '1000';
+    buttonContainer.style.display = 'flex';
+    buttonContainer.style.gap = '5px';
+    
+    const mainViewBtn = document.createElement('button');
+    mainViewBtn.textContent = 'Main View';
+    mainViewBtn.className = 'view-toggle-btn';
+    mainViewBtn.addEventListener('click', () => {
+        if (mainGraphData) {
+            currentGraphMode = 'main';
+            renderCurrentGraph();
+        }
+    });
+    
+    const communityViewBtn = document.createElement('button');
+    communityViewBtn.textContent = 'Community View';
+    communityViewBtn.className = 'view-toggle-btn';
+    communityViewBtn.addEventListener('click', () => {
+        if (communityGraphData) {
+            currentGraphMode = 'community';
+            renderCurrentGraph();
+        } else {
+            alert('Run community analysis first');
+        }
+    });
+    
+    buttonContainer.appendChild(mainViewBtn);
+    buttonContainer.appendChild(communityViewBtn);
+    container.appendChild(buttonContainer);
+  }
+
+ function inferAttackType(features) {
       const [
         connections, flowCount, internalFlag,
         pktRate, timeRange,
@@ -541,11 +628,11 @@ function focusOnNode(nodeId) {
 // COMMUNITY ANALYSIS SECTION
 // ==============================
 
-// Store reference to the graph data (set this after main graph is rendered)
-let communityGraphData = null;
-
 // Event listener for "Analyze Communities" button
-document.getElementById('run-community-analysis').addEventListener('click', async () => {
+document.getElementById('run-community-analysis').addEventListener('click', runCommunityAnalysis);
+
+// Simulated community detection logic
+async function runCommunityAnalysis() {
     const algorithm = document.getElementById('community-algorithm').value;
     const button = document.getElementById('run-community-analysis');
     
@@ -557,8 +644,35 @@ document.getElementById('run-community-analysis').addEventListener('click', asyn
             throw new Error("No graph data available");
         }
 
-        const communities = await runCommunityDetection(communityGraphData, algorithm);
-        renderCommunityGraph(communityGraphData, communities);
+        // Prepare the payload for community detection
+        const payload = {
+            algorithm: algorithm,
+            nodes: communityGraphData.nodes.map(n => n.id),
+            edges: communityGraphData.links.map(link => [
+                link.source.id || link.source,
+                link.target.id || link.target
+            ]),
+            predictions: communityGraphData.nodes.map(n => n.group),
+        };
+
+        console.time('Community Detection');
+        const response = await fetch('/api/analyze-communities', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
+        console.timeEnd('Community Detection');
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Community detection failed');
+        }
+
+        const apiResponse = await response.json();
+        
+        updateCommunityGraph(apiResponse);
         
         // Show results section
         document.getElementById('community-results').style.display = 'block';
@@ -569,246 +683,88 @@ document.getElementById('run-community-analysis').addEventListener('click', asyn
         button.disabled = false;
         button.textContent = 'Analyze Communities';
     }
-});
+  }
 
-// Simulated community detection logic
-async function runCommunityDetection(graphData, algorithm) {
-    try {
-        console.time('Total Community Detection Time');
 
-        console.time('Step 1: Preparing node list');
-        const nodes = graphData.nodes.map(n => n.id);
-        console.timeEnd('Step 1: Preparing node list');
 
-        console.time('Step 2: Building node index map');
-        const nodeIndexMap = new Map();
-        nodes.forEach((id, idx) => nodeIndexMap.set(id, idx));
-        console.timeEnd('Step 2: Building node index map');
-
-        console.time('Step 3: Processing edges');
-
-        const edges = graphData.links.map(link => [
-            link.source.id || link.source,
-            link.target.id || link.target
-        ]);
-        console.timeEnd('Step 3: Processing edges');
-
-        console.time('Step 4: Preparing payload');
-        const payload = {
-            algorithm: algorithm,
-            nodes: nodes,
-            edges: edges,
-            predictions: graphData.nodes.map(n => n.group),
-        };
-        console.timeEnd('Step 4: Preparing payload');
-
-        console.time('Step 5: Sending request');
-        const response = await fetch('/api/analyze-communities', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(payload)
-        });
-        console.timeEnd('Step 5: Sending request');
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Community detection failed');
+function updateCommunityGraph(apiResponse) {
+    // 1. Validate input data (from your suggestion)
+    if (!apiResponse?.communities) {
+        console.error("API response is missing 'communities' data.");
+        alert("Error: Could not retrieve community information from the server.");
+        // Restore button state if it was disabled
+        const button = document.getElementById('run-community-analysis');
+        if (button) {
+            button.disabled = false;
+            button.textContent = 'Analyze Communities';
         }
-
-        console.timeEnd('Total Community Detection Time');
-
-        return await response.json();
-    } catch (error) {
-        console.error('Community detection error:', error);
-        throw error;
+        return;
     }
-}
-
-
-// Renders a second graph with nodes colored by community
-function renderCommunityGraph(graphData, apiResponse) {
-    const container = document.getElementById('community-graph-container');
-    const legendContainer = document.getElementById('community-legend');
-    container.innerHTML = '';
-    legendContainer.innerHTML = '';
-
-    try {
-        // Validate input data
-        if (!apiResponse?.communities || !graphData?.nodes) {
-            throw new Error("Invalid community data received");
+    if (!communityGraphData?.nodes || communityGraphData.nodes.length === 0) {
+        console.error("No graph node data available to update for community analysis.");
+        alert("Error: No graph data loaded. Please process a file first.");
+        const button = document.getElementById('run-community-analysis');
+        if (button) {
+            button.disabled = false;
+            button.textContent = 'Analyze Communities';
         }
+        return;
+    }
 
-        // Get all unique community IDs
-        const communityIds = Object.values(apiResponse.communities);
-        const uniqueCommunityIds = [...new Set(communityIds)];
+    const nodeCommunityMap = apiResponse.communities;
 
-        // Create color scale
-        const colorScale = d3.scaleOrdinal()
-            .domain(uniqueCommunityIds)
-            .range(uniqueCommunityIds.map((_, i) => `hsl(${(i * 137.5) % 360}, 100%, 50%)`));
+    // 2. Get all unique community IDs (ensure robust handling and sorting for consistent color mapping)
+    // Filter out null/undefined community IDs that might come from the API
+    const communityIds = Object.values(nodeCommunityMap).filter(id => id !== null && id !== undefined);
+    const uniqueCommunityIds = [...new Set(communityIds)].sort((a, b) => String(a).localeCompare(String(b))); // Sort for consistency
 
-        // Count community sizes
-        const communitySizes = {};
-        graphData.nodes.forEach(node => {
-            const commId = apiResponse.communities[node.id];
+    // 3. Create color scale (using your HSL suggestion for better distinct colors)
+    const colorScale = d3.scaleOrdinal()
+        .domain(uniqueCommunityIds)
+        .range(uniqueCommunityIds.map((_, i) => `hsl(${(i * 137.508) % 360}, 75%, 55%)`)); // Golden angle, good saturation/lightness
+
+    // 4. Count community sizes
+    const communitySizes = {};
+    communityGraphData.nodes.forEach(node => {
+        const commId = nodeCommunityMap[node.id];
+        if (commId != null) { // Only count if node belongs to a community
             communitySizes[commId] = (communitySizes[commId] || 0) + 1;
-        });
-
-        // Prepare nodes with community data
-        const coloredNodes = graphData.nodes.map(node => ({
-            ...node,
-            color: colorScale(apiResponse.communities[node.id]),
-            community: apiResponse.communities[node.id],
-            size: Math.max(1, Math.min(5, Math.sqrt(communitySizes[apiResponse.communities[node.id]] || 1)))
-        }));
-
-        // Prepare links
-        const links = graphData.links.map(link => ({
-            source: link.source.id || link.source,
-            target: link.target.id || link.target,
-            value: 1
-        }));
-
-        const graphDiv = document.createElement('div');
-        graphDiv.style.width = '100%';
-        graphDiv.style.height = '100%';
-        container.appendChild(graphDiv);
-
-        // ✅ FIX: Use global THREE
-        const THREE = window.THREE;
-        if (!THREE) throw new Error("THREE.js is not loaded correctly.");
-
-        // Initialize the graph
-        const graph = ForceGraph3D()(graphDiv)
-        .graphData({ nodes: coloredNodes, links })
-        .nodeLabel(node => `${node.id}\nCommunity ${node.community}\nType: ${node.group ? 'ATTACK' : 'Normal'}`)
-        .nodeColor(node => node.color) // Community color
-        .nodeVal(node => node.size)
-        .nodeThreeObject(node => {
-            const group = new THREE.Group();
-            
-            // Main node with community color
-            const sphere = new THREE.Mesh(
-                new THREE.SphereGeometry(node.size),
-                new THREE.MeshPhongMaterial({
-                    color: new THREE.Color(node.color),
-                    transparent: true,
-                    opacity: 0.8
-                })
-            );
-            group.add(sphere);
-            
-            // Add red ring for malicious nodes
-            if (node.group) {
-                const ring = new THREE.Mesh(
-                    new THREE.TorusGeometry(node.size * 1.1, node.size * 0.1, 16, 32),
-                    new THREE.MeshPhongMaterial({ color: 'hsl(0, 100%, 50%)', shininess: 50 })
-                );
-                ring.rotation.x = Math.PI / 2;
-                group.add(ring);
-            }
-            
-            return group;
-        })
-        .linkWidth(0.75);
-
-        console.log('Graph initialized, configuring controls...'); // Debug 5
-        
-        // Explicit control configuration
-        if (graph.controls()) {
-            console.log('Controls found, configuring...');
-            const controls = graph.controls();
-            
-            // For newer versions of Three.js/ForceGraph, use these properties:
-            controls.rotateSpeed = 1.0;
-            controls.zoomSpeed = 1.2;
-            controls.panSpeed = 0.8;
-            
-            // These are the correct property names for OrbitControls
-            controls.enableRotate = true;    // Rotation
-            controls.enableZoom = true;      // Zoom
-            controls.enablePan = true;       // Panning
-            
-            // Additional settings for better control
-            controls.screenSpacePanning = true;
-            controls.dampingFactor = 0.25;
-            
-            console.log('Updated control properties:', {
-                enableRotate: controls.enableRotate,
-                enableZoom: controls.enableZoom,
-                enablePan: controls.enablePan,
-                rotateSpeed: controls.rotateSpeed
-            });
-        } else {
-            console.warn('No controls found on graph instance!'); // Debug 8
         }
+    });
+
+    // 5. Prepare nodes with community data (updates global communityGraphData.nodes)
+    communityGraphData.nodes = communityGraphData.nodes.map(node => {
+        const commId = nodeCommunityMap[node.id]; // Might be undefined if node.id not in map
+        // If commId is undefined (node not in any community), colorScale(undefined) will assign a color.
+        // This color will be consistent for all unassigned nodes.
+        const calculatedColor = colorScale(commId);
+
+        return {
+            ...node, // Preserves original node data (id, group, features etc.)
+            community: commId,
+            color: calculatedColor, // This will be used by renderCurrentGraph's .nodeColor()
+            // Your custom 'size' property (ForceGraph3D won't use this for visual size by default)
+            customSize: Math.max(1, Math.min(5, Math.sqrt(communitySizes[commId] || 1)))
+        };
+    });
+
+    // 6. Link processing (optional, as original links are likely ID-based and fine)
+    // If you want to be absolutely sure about link format:
+    communityGraphData.links = communityGraphData.links.map(link => ({
+         source: typeof link.source === 'object' ? String(link.source.id) : String(link.source),
+         target: typeof link.target === 'object' ? String(link.target.id) : String(link.target),
+         value: link.value || 1 // Preserve original value or default to 1
+     }));
 
 
-        // Force controls update
-        setTimeout(() => {
-            if (graph.controls()) {
-                // Dispose old controls
-                graph.controls().dispose();
-                
-                // Create new OrbitControls
-                const newControls = new THREE.OrbitControls(graph.camera(), graph.renderer().domElement);
-                newControls.enableRotate = true;
-                newControls.enableZoom = true;
-                newControls.enablePan = true;
-                
-                // Replace controls
-                graph._controls = newControls;
-            }
-        }, 100);
+    // 7. Update UI elements like legend and metrics
+    addCommunityLegend(document.getElementById('community-legend'), uniqueCommunityIds, communitySizes, colorScale);
+    updateCommunityMetrics(apiResponse, communitySizes, communityGraphData.nodes.length);
 
-        graph.onEngineTick(() => {
-            graph.graphData().nodes.forEach(node => {
-                if (node.group && node.__threeObj) {
-                    const scale = 1 + 0.1 * Math.sin(Date.now() * 0.005);
-                    node.__threeObj.scale.set(scale, scale, scale);
-                }
-            });
-        });
-
-        // Handle window resize
-        const resizeObserver = new ResizeObserver(() => {
-            graph.width(graphDiv.offsetWidth)
-                .height(graphDiv.offsetHeight);
-        });
-        resizeObserver.observe(container);
-
-        // Add legend
-        addCommunityLegend(legendContainer, uniqueCommunityIds, communitySizes, colorScale);
-
-        // Update metrics display
-        updateCommunityMetrics(apiResponse, communitySizes, graphData.nodes.length);
-
-        // Add security insights if available
-        if (apiResponse.security_insights) {
-            const insightsEl = document.createElement('div');
-            insightsEl.className = 'security-insights';
-            insightsEl.innerHTML = `
-                <h4>Security Insights</h4>
-                ${renderSecurityInsights(apiResponse.security_insights)}
-            `;
-            legendContainer.appendChild(insightsEl);
-        }
-
-    } catch (error) {
-        console.error("Graph rendering failed:", error);
-        container.innerHTML = `
-            <div class="error-message">
-                <h3>Visualization Error</h3>
-                <p>${error.message}</p>
-            </div>
-        `;
-    }
+    // 8. Set mode and trigger re-render
+    currentGraphMode = 'community';
+    renderCurrentGraph(); // This function should now use the updated communityGraphData
 }
-
-
-
 
 function renderSecurityInsights(insights) {
     let html = '';
