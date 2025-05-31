@@ -298,18 +298,42 @@ let communityViewBtn = null;
                 .onNodeClick(handleNodeClick);
         } else { // community mode
             if (mainGraphInstance) {
-                // mainGraphInstance.pauseAnimation();
-                // mainGraphInstance._destructor?.();
                 mainGraphInstance = null;
             }
             communityGraphInstance = ForceGraph3D()(graphDiv)
-                .width(initialWidth)
-                .height(initialHeight)
-                .graphData(data)
-                .nodeLabel(node => `${node.id}\nCommunity ${node.community}\nType: ${node.group ? 'ATTACK' : 'Normal'}`)
-                .nodeColor(node => node.color) // Make sure node.color is a valid color string
-                .linkWidth(0.75)
-                .onNodeClick(handleNodeClick);
+            .width(initialWidth)
+            .height(initialHeight)
+            .graphData(data)
+            .nodeLabel(node => `${node.id}\nCommunity ${node.community}\nType: ${node.group ? 'ATTACK' : 'Normal'}`)
+            .nodeColor(node => node.color)
+            .linkWidth(0.75)
+            .onNodeClick(handleNodeClick)
+            .nodeThreeObjectExtend(true) // Allows adding a second object (like the torus)
+            .nodeThreeObject(node => {
+                if (node.group) {
+                    // Malicious node — create a torus around it
+                    const group = new THREE.Group();
+
+                    // Create the core sphere
+                    const core = new THREE.Mesh(
+                        new THREE.SphereGeometry(4),
+                        new THREE.MeshBasicMaterial({ color: node.color })
+                    );
+                    group.add(core);
+
+                    // Create the torus ring
+                    const ring = new THREE.Mesh(
+                        new THREE.TorusGeometry(5, 0.6, 8, 24),
+                        new THREE.MeshBasicMaterial({ color: getInverseColor(node.color) })
+                    );
+                    ring.rotation.x = Math.PI / 2;
+                    group.add(ring);
+
+                    return group;
+                } else {
+                    return undefined;
+                }
+            });
         }
 
         // Adjust ResizeObserver to use graphDiv and the correct current instance
@@ -326,6 +350,26 @@ let communityViewBtn = null;
         resizeObserver.observe(graphDiv); // Observe the graphDiv itself
     });
 }
+
+    function getInverseColor(hex) {
+    // Ensure it's a 6-digit hex
+    if (hex.startsWith('#')) {
+        hex = hex.slice(1);
+    }
+
+    if (hex.length === 3) {
+        // Expand shorthand (#f00 => #ff0000)
+        hex = hex.split('').map(c => c + c).join('');
+    }
+
+    // Invert each RGB component
+    const r = (255 - parseInt(hex.substring(0, 2), 16)).toString(16).padStart(2, '0');
+    const g = (255 - parseInt(hex.substring(2, 4), 16)).toString(16).padStart(2, '0');
+    const b = (255 - parseInt(hex.substring(4, 6), 16)).toString(16).padStart(2, '0');
+
+    return `#${r}${g}${b}`;
+}
+
 
   function handleNodeClick(node, event) {
     // Get connected nodes
