@@ -9,6 +9,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let resizeObserver = null;
   let activeUploads = new Set();
   let currentFileId = null;
+  let mainViewBtn = null;
+let communityViewBtn = null;
 
   // DOM elements
   const fileInput = document.getElementById('file-input');
@@ -33,8 +35,6 @@ document.addEventListener('DOMContentLoaded', () => {
   popup.style.maxWidth = '300px';
   document.body.appendChild(popup);
 
-  // Initialize the UI
-  addViewToggleButtons();
 
   // Event listeners
   fileInput.addEventListener('change', handleFileSelect);
@@ -135,6 +135,13 @@ document.addEventListener('DOMContentLoaded', () => {
         showResults(results);
         initVisualization(results);
         updateProgress('Analysis complete!', 100);
+        
+        if (!mainViewBtn || !communityViewBtn) {
+            addViewToggleButtons();  // create and show buttons if not already added
+        } else {
+            mainViewBtn.style.display = 'inline-block';
+            communityViewBtn.style.display = 'inline-block';
+        }
     } catch (error) {
         handleError(error);
     } finally {
@@ -402,17 +409,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Add view toggle buttons
   function addViewToggleButtons() {
-    const container = document.getElementById('graph-container');
-    
+    const graphContainer = document.getElementById('graph-container');
+
+    // Prevent duplicate insertion
+    if (document.getElementById('view-toggle-container')) return;
+
     const buttonContainer = document.createElement('div');
-    buttonContainer.style.position = 'absolute';
-    buttonContainer.style.top = '10px';
-    buttonContainer.style.right = '10px';
-    buttonContainer.style.zIndex = '1000';
+    buttonContainer.id = 'view-toggle-container';
     buttonContainer.style.display = 'flex';
-    buttonContainer.style.gap = '5px';
-    
-    const mainViewBtn = document.createElement('button');
+    buttonContainer.style.justifyContent = 'center';
+    buttonContainer.style.marginTop = '15px';
+    buttonContainer.style.gap = '10px';
+
+    mainViewBtn = document.createElement('button');
     mainViewBtn.textContent = 'Main View';
     mainViewBtn.className = 'view-toggle-btn';
     mainViewBtn.addEventListener('click', () => {
@@ -421,8 +430,8 @@ document.addEventListener('DOMContentLoaded', () => {
             renderCurrentGraph();
         }
     });
-    
-    const communityViewBtn = document.createElement('button');
+
+    communityViewBtn = document.createElement('button');
     communityViewBtn.textContent = 'Community View';
     communityViewBtn.className = 'view-toggle-btn';
     communityViewBtn.addEventListener('click', () => {
@@ -433,11 +442,13 @@ document.addEventListener('DOMContentLoaded', () => {
             alert('Run community analysis first');
         }
     });
-    
+
     buttonContainer.appendChild(mainViewBtn);
     buttonContainer.appendChild(communityViewBtn);
-    container.appendChild(buttonContainer);
-  }
+
+    // 👉 Insert the buttons **after** the graph container
+    graphContainer.insertAdjacentElement('afterend', buttonContainer);
+}
 
  function inferAttackType(features) {
       const [
