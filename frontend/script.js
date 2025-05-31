@@ -434,6 +434,7 @@ let communityViewBtn = null;
     communityViewBtn = document.createElement('button');
     communityViewBtn.textContent = 'Community View';
     communityViewBtn.className = 'view-toggle-btn';
+    communityViewBtn.disabled = true;
     communityViewBtn.addEventListener('click', () => {
         if (communityGraphData) {
             currentGraphMode = 'community';
@@ -684,6 +685,7 @@ async function runCommunityAnalysis() {
         const apiResponse = await response.json();
         
         updateCommunityGraph(apiResponse);
+        communityViewBtn.disabled = false;
         
         // Show results section
         document.getElementById('community-results').style.display = 'block';
@@ -769,8 +771,18 @@ function updateCommunityGraph(apiResponse) {
 
 
     // 7. Update UI elements like legend and metrics
-    addCommunityLegend(document.getElementById('community-legend'), uniqueCommunityIds, communitySizes, colorScale);
+    legendContainer = document.getElementById('community-legend');
+    addCommunityLegend(legendContainer, uniqueCommunityIds, communitySizes, colorScale);
     updateCommunityMetrics(apiResponse, communitySizes, communityGraphData.nodes.length);
+    if (apiResponse.security_insights) {
+        const insightsEl = document.createElement('div');
+        insightsEl.className = 'security-insights';
+        insightsEl.innerHTML = `
+            <h4>Security Insights</h4>
+            ${renderSecurityInsights(apiResponse.security_insights)}
+        `;
+        legendContainer.appendChild(insightsEl);
+    }
 
     // 8. Set mode and trigger re-render
     currentGraphMode = 'community';
