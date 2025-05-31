@@ -71,7 +71,7 @@ let communityViewBtn = null;
     try {
         if (!selectedFile) throw new Error('No file selected');
 
-        const chunkSize = 500 * 1024 * 1024;
+        const chunkSize = 1 * 1024 * 1024 * 1024;
         const totalChunks = Math.ceil(selectedFile.size / chunkSize);
         const maxPackets = document.getElementById('max-packets').value;
         currentFileId = uuidv4();
@@ -293,7 +293,7 @@ let communityViewBtn = null;
                 .height(initialHeight)
                 .graphData(data)
                 .nodeLabel(node => `${node.id}\nType: ${node.group ? 'ATTACK' : 'Normal'}`)
-                .nodeColor(node => node.group ? '#ff3333' : '#00cc00')
+                .nodeColor(node => node.group ? `hsl(0, 100%, 50%)` : `hsl(120, 100%, 40%)`)
                 .linkWidth(0.75)
                 .onNodeClick(handleNodeClick);
         } else { // community mode
@@ -778,7 +778,7 @@ function updateCommunityGraph(apiResponse) {
     // 3. Create color scale (using your HSL suggestion for better distinct colors)
     const colorScale = d3.scaleOrdinal()
         .domain(uniqueCommunityIds)
-        .range(uniqueCommunityIds.map((_, i) => `hsl(${(i * 137.508) % 360}, 75%, 55%)`)); // Golden angle, good saturation/lightness
+        .range(uniqueCommunityIds.map((_, i) => `hsl(${(i * 137.508) % 360}, 85%, 50%)`));
 
     // 4. Count community sizes
     const communitySizes = {};

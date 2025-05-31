@@ -82,7 +82,7 @@ async def upload_chunk(
         chunk_path = chunk_folder / f"{chunk_index}"
         
         async with aiofiles.open(chunk_path, "wb") as buffer:
-            while content := await file.read(500 * 1024 * 1024):  # 1MB chunks
+            while content := await file.read(1 * 1024 * 1024 * 1024):  # 1GB chunks
                 await buffer.write(content)
                 
         return {"status": "ok", "chunk": chunk_index}
