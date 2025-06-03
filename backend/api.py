@@ -1,13 +1,9 @@
 import os
-import shutil
 import time
-import tempfile
 import traceback
-import uuid
-from typing import Optional
-from fastapi import FastAPI, Form, Header, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, Form, UploadFile, File, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import networkx as nx
 import numpy as np
@@ -17,11 +13,7 @@ from .pcap_processor import PCAPProcessor
 from .classifier import NetworkAttackClassifier
 from torch_geometric.data import Data
 from .graph_algorithms import GraphAnalyzer
-import asyncio
 from pathlib import Path
-from starlette.formparsers import MultiPartParser
-from starlette.middleware import Middleware
-from starlette.middleware.base import BaseHTTPMiddleware
 import aiofiles
 
 app = FastAPI(
@@ -122,7 +114,7 @@ async def merge_chunks(req: MergeRequest):
             for i in range(req.total_chunks):
                 chunk_path = chunk_folder / str(i)
                 async with aiofiles.open(chunk_path, 'rb') as infile:
-                    while content := await infile.read(1024 * 1024 * 1024):  # 1MB chunks
+                    while content := await infile.read(1024 * 1024 * 1024):  # 1GB chunks
                         await outfile.write(content)
                 # Remove the chunk after merging
                 try:
