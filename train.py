@@ -1,100 +1,23 @@
 import warnings
-from matplotlib import pyplot as plt
-from numpy import copy
 import torch
 import torch.nn.functional as F
-from torch_geometric.data import Data
-from utils.graph_construction import build_graph_from_partition
 from models.GAT import GAT
 from config import Config
-import gc
-import os
-from utils.monitoring import print_system_stats
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
     recall_score,
     precision_score,
-    roc_auc_score,
-    confusion_matrix,
-    classification_report
+    roc_auc_score
 )
 from sklearn.exceptions import ConvergenceWarning
 
 warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
-def _analyze_class_distribution(data, partition_idx):
-    """Analyze and visualize class distribution"""
-    # Move data to CPU for numpy operations
-    train_counts = torch.bincount(data.y[data.train_mask].cpu())
-    val_counts = torch.bincount(data.y[data.val_mask].cpu())
-    
-    imbalance_ratio = max(train_counts[0]/train_counts[1], 
-                       train_counts[1]/train_counts[0])
-    
-    print(f"\n📊 Partition {partition_idx} Class Distribution:")
-    print(f"- Train: Benign={train_counts[0].item()}, Malicious={train_counts[1].item()}")
-    print(f"- Val:   Benign={val_counts[0].item()}, Malicious={val_counts[1].item()}")
-    print(f"- Imbalance Ratio: {imbalance_ratio:.1f}:1")
-    
-    if imbalance_ratio > Config.IMBALANCE_THRESHOLD:
-        print("⚠️ Warning: Severe class imbalance detected!")
-    
-    # Visualization (ensure matplotlib operations happen on CPU)
-    plt.figure(figsize=(10, 4))
-    plt.subplot(121)
-    plt.bar(['Benign', 'Malicious'], train_counts.numpy())
-    plt.title('Train Set Distribution')
-    
-    plt.subplot(122)
-    plt.bar(['Benign', 'Malicious'], val_counts.numpy())
-    plt.title('Validation Set Distribution')
-    
-    plt.savefig(f'class_dist_partition_{partition_idx}.png')
-    plt.close()
-    
-    return imbalance_ratio
-
-def _calculate_metrics(model, data, mask, device, prefix=""):
-    """Calculate metrics for a specific mask"""
-    model.eval()
-    with torch.no_grad():
-        logits = model(data.x.to(device), data.edge_index.to(device))
-        
-        # Move predictions to CPU for sklearn metrics
-        preds = logits.argmax(dim=1).cpu().numpy()
-        probs = torch.softmax(logits, dim=1).cpu().numpy()
-        
-        y_true = data.y[mask].cpu().numpy()
-        y_pred = preds[mask]
-        y_probs = probs[mask, 1]
-
-        return {
-            'accuracy': accuracy_score(y_true, y_pred),
-            'f1': f1_score(y_true, y_pred),
-            'recall': recall_score(y_true, y_pred),
-            'precision': precision_score(y_true, y_pred),
-            'roc_auc': roc_auc_score(y_true, y_probs),
-            'confusion_matrix': confusion_matrix(y_true, y_pred),
-            'classification_report': classification_report(
-                y_true, y_pred,
-                target_names=['Benign', 'Malicious'],
-                output_dict=True
-            )
-        }
-
-import copy
-import torch
-import numpy as np
-from torch import nn
-import torch.nn.functional as F
-from sklearn.metrics import accuracy_score, f1_score, recall_score, precision_score, roc_auc_score, confusion_matrix
 
 def train_model(data, device, partition_idx=None):
     """Enhanced training function with detailed metrics logging"""
-    # ======================
     # 1. Initial Setup
-    # ======================
     data = data.to(device)
     print(f"\n=== Training Partition {partition_idx} on {device} ===")
     
@@ -105,9 +28,7 @@ def train_model(data, device, partition_idx=None):
         Config.GLOBAL_BEST_METRICS = None
         Config.GLOBAL_BEST_PARTITION = None
 
-    # ======================
     # 2. Model Configuration
-    # ======================
     model = GAT(num_features=data.num_features).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -123,9 +44,7 @@ def train_model(data, device, partition_idx=None):
 
     class_weights = torch.tensor(Config.CLASS_WEIGHTS, device=device)
 
-    # ======================
     # 3. Training Loop
-    # ======================
     best_val_acc = 0
     best_model_state = None
     early_stop_counter = 0
@@ -187,9 +106,7 @@ def train_model(data, device, partition_idx=None):
                 if early_stop_counter >= Config.PATIENCE:
                     break
 
-    # ======================
     # 4. Final Evaluation
-    # ======================
     if best_model_state:
         model.load_state_dict(best_model_state)
     

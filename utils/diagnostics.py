@@ -1,12 +1,9 @@
-import numpy as np
 import torch
 import torch_geometric
 from torch_geometric.data import Data
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import f1_score, classification_report
 from config import Config
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 def remove_duplicates(data):
     """Enhanced duplicate removal with feature threshold"""

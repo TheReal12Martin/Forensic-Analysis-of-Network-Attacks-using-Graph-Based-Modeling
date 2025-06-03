@@ -1,10 +1,8 @@
 import os
-
 import torch
 
 
 class Config:
-    # Updated Data Configuration
     DATA_FOLDER = "/home/martin/TFG/Forensic-Analysis-of-Network-Attacks-using-Graph-Based-Modeling/CSVs/BCCC-CIC2018"
 
     DATA_PATTERN = "*merged*.csv"
@@ -34,7 +32,7 @@ class Config:
         '1': 1
     }
     
-    # Feature Configuration (adjust based on your dataset)
+    # Feature Configuration
     NUMERIC_FEATURES = [
         'duration',
         'packets_count',
@@ -70,7 +68,7 @@ class Config:
     MIN_TEST_SAMPLES = 100       # Minimum samples per class in test set
     MIN_VAL_ACC = 0.7
 
-    MIN_SAMPLES_PER_CLASS = 10  # Minimum samples per class to process #######################################################################
+    MIN_SAMPLES_PER_CLASS = 10  # Minimum samples per class to process
     K_NEIGHBORS = 5               # For KNN graph construction
     MIN_SIMILARITY = 0.8    # Cosine similarity threshold
     MIN_NEIGHBORS = 2             # Minimum neighbors for kNN
@@ -148,7 +146,7 @@ class Config:
     FOCAL_GAMMA = 3.0
 
     CPU_THREADS = 2  # Optimal for most systems
-    FORCE_SINGLE_CORE = False  # Set True if still seeing high CPU
+    FORCE_SINGLE_CORE = False  # Set True if still seeing high CPU %
 
     @classmethod
     def update_feature_dimensions(cls, actual_features):

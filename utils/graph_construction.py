@@ -1,8 +1,5 @@
-import os
 import networkx as nx
 import numpy as np
-from sklearn.exceptions import NotFittedError
-from tqdm import tqdm
 from config import Config
 import gc
 from sklearn.neighbors import NearestNeighbors

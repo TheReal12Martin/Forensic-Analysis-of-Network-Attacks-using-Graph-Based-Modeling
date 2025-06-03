@@ -17,7 +17,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from config import Config
 from utils.feature_importance import analyze_feature_importance
-from utils.monitoring import log_resource_usage
 
 
 
@@ -119,7 +118,7 @@ def evaluate_model(model, data, device, partition_idx=None):
         # Generate visualizations
         _generate_metric_plots(y_true, y_probs, metrics, partition_idx)
 
-        # Feature importance analysis (only for final evaluation)
+        # Feature importance analysis
         if partition_idx is None:
             print("\n🔎 Analyzing feature importance...")
             try:

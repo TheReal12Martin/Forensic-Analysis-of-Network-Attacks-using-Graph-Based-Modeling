@@ -11,8 +11,6 @@ from typing import Dict, Optional, Set
 import subprocess
 import csv
 import os
-import dask.dataframe as dd
-from dask.diagnostics import ProgressBar
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -372,7 +370,7 @@ class PCAPProcessor:
             self.flows[flow_key].append({
                 'timestamp': timestamp,
                 'size': size,
-                'flags': flags,  # Now stores dictionary of flags
+                'flags': flags,  # Stores dictionary of flags
                 'duration': 0   # Will be updated in _calculate_flow_stats()
             })
             self._update_graph_entities(src, dst)
@@ -429,7 +427,6 @@ class PCAPProcessor:
                 # Extract size statistics
                 sizes = np.concatenate([f['sizes'] for f in relevant_flows]) if relevant_flows else np.array([0])
                 small_pkt_ratio = np.mean(sizes < 60) if len(sizes) > 0 else 0
-                large_pkt_ratio = np.mean(sizes > 1500) if len(sizes) > 0 else 0
 
                 # Protocol distribution
                 proto_counts = {
@@ -441,26 +438,26 @@ class PCAPProcessor:
                 
                 # --- Feature Engineering (13 features exactly) ---
                 features[i] = [
-                    # 1. Basic features (3) - unchanged
+                    # 1. Basic features (3)
                     np.log1p(node_data['connections']) / 10.0,
                     np.log1p(len(relevant_flows)) / 8.0,
                     1.0 if node_data.get('type') == 'host' else 0.0,
                     
-                    # 2. Timing features (2) - added epsilon for stability
+                    # 2. Timing features (2)
                     np.log1p(max(packet_rate, 1e-6)) / 10.0,  # Prevents log(0)
                     min(1.0, np.log1p(time_range + 1e-6) / 12.0),
                     
-                    # 3. Size features (3) - normalized and clipped
+                    # 3. Size features (3)
                     np.clip(np.log1p(np.mean(sizes)) / 12.0, 0, 1),
                     np.clip(np.log1p(np.std(sizes)) / 10.0 if len(sizes) > 1 else 0.0, 0, 1),
-                    np.clip(small_pkt_ratio, 0, 1),  # Removed large_pkt_ratio
+                    np.clip(small_pkt_ratio, 0, 1), 
                     
-                    # 4. Flag features (3) - added interaction terms
+                    # 4. Flag features (3)
                     syn_ratio,
                     rst_ratio,
                     min(1.0, ack_ratio + syn_ratio),  # Combined ACK+SYN pattern
                     
-                    # 5. Protocol mix (2) - unchanged ratios
+                    # 5. Protocol mix (2)
                     proto_counts['tcp'] / total_flows,
                     proto_counts['udp'] / total_flows
                 ]

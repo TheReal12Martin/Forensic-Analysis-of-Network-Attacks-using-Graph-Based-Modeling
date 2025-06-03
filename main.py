@@ -5,7 +5,6 @@ from metrics_visualization import plot_combined_metrics_trend
 from utils.pyg_conversion import convert_to_pyg_memory_safe
 from utils.graph_construction import build_graph_from_partition
 from train import train_model
-from evaluate import evaluate_model
 from utils.monitoring import initialize_monitoring, log_resource_usage
 from utils.diagnostics import verify_data_consistency, run_baseline_comparison
 import gc
@@ -129,5 +128,5 @@ def main():
     log_resource_usage("End")
 
 if __name__ == "__main__":
-    os.nice(19)  # Lower priority
+    os.nice(19) 
     main()

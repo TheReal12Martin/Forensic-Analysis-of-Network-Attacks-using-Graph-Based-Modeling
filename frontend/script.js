@@ -137,7 +137,7 @@ let communityViewBtn = null;
         updateProgress('Analysis complete!', 100);
         
         if (!mainViewBtn || !communityViewBtn) {
-            addViewToggleButtons();  // create and show buttons if not already added
+            addViewToggleButtons(); 
         } else {
             mainViewBtn.style.display = 'inline-block';
             communityViewBtn.style.display = 'inline-block';
@@ -267,11 +267,8 @@ let communityViewBtn = null;
         const initialHeight = graphDiv.offsetHeight;
 
         // If dimensions are still zero, it indicates a layout issue with 'graph-container'
-        // or that 'graph-container' is hidden. For now, we'll proceed,
-        // but in a production scenario, you might want to add a retry or error handling.
         if (initialWidth === 0 || initialHeight === 0) {
             console.warn("Graph container (graphDiv) has zero dimensions during initialization. Graph may not render correctly.");
-            // Optionally, you could try to wait a bit more, e.g., with another setTimeout, or simply proceed.
         }
 
         const data = currentGraphMode === 'main' ? mainGraphData : communityGraphData;
@@ -283,9 +280,6 @@ let communityViewBtn = null;
 
         if (currentGraphMode === 'main') {
             if (communityGraphInstance) {
-                // Consider pausing or cleaning up the other instance if it exists
-                // communityGraphInstance.pauseAnimation();
-                // communityGraphInstance._destructor?.(); // If library supports explicit destruction
                 communityGraphInstance = null; 
             }
             mainGraphInstance = ForceGraph3D()(graphDiv)
@@ -358,7 +352,6 @@ let communityViewBtn = null;
     }
 
     if (hex.length === 3) {
-        // Expand shorthand (#f00 => #ff0000)
         hex = hex.split('').map(c => c + c).join('');
     }
 
@@ -491,7 +484,6 @@ let communityViewBtn = null;
     buttonContainer.appendChild(mainViewBtn);
     buttonContainer.appendChild(communityViewBtn);
 
-    // 👉 Insert the buttons **after** the graph container
     graphContainer.insertAdjacentElement('afterend', buttonContainer);
 }
 
@@ -633,23 +625,54 @@ function getThreatLevelClass(confidence) {
 }
 
 function focusOnNode(nodeId) {
-  if (!graphInstance) return;
-  
-  const node = graphInstance.graphData().nodes.find(n => n.id === nodeId);
-  if (node) {
-    // Calculate distance based on node importance
-    const distance = 100 + (node.group ? 50 : 0);
+    // Get the current graph instance based on mode
+    const currentInstance = currentGraphMode === 'main' ? mainGraphInstance : communityGraphInstance;
+    if (!currentInstance) return;
     
-    // Focus on the node
-    graphInstance.centerAt(node.x, node.y, node.z, 1000);
-    graphInstance.zoom(distance, 1000);
+    // Get the graph data from the appropriate source
+    const graphData = currentGraphMode === 'main' ? mainGraphData : communityGraphData;
+    if (!graphData || !graphData.nodes) return;
     
-    // Highlight the node
-    const nodeObj = graphInstance.getGraphBbox(nodeId);
-    if (nodeObj) {
-      // You could add additional highlighting here if needed
+    // Find the node in the graph data
+    const node = graphData.nodes.find(n => n.id === nodeId);
+    if (!node) return;
+    
+    try {
+        const nodePosition = node.x !== undefined && node.y !== undefined && node.z !== undefined 
+            ? { x: node.x, y: node.y, z: node.z }
+            : currentInstance.cameraPosition();
+        
+        // Calculate distance based on node importance
+        const distance = node.group ? 150 : 300;
+        const duration = 1000;
+        
+        // Animate the camera to focus on the node
+        currentInstance.cameraPosition(
+            { 
+                x: nodePosition.x, 
+                y: nodePosition.y, 
+                z: nodePosition.z + distance 
+            }, 
+            { x: nodePosition.x, y: nodePosition.y, z: nodePosition.z }, 
+            duration
+        );
+        
+        // If there's a popup open, close it to avoid confusion
+        if (popup.style.display === 'block') {
+            popup.style.display = 'none';
+        }
+        
+        // Open the node details popup programmatically
+        const fakeEvent = {
+            clientX: window.innerWidth / 2,
+            clientY: window.innerHeight / 2,
+            stopPropagation: () => {}
+        };
+        handleNodeClick(node, fakeEvent);
+        
+    } catch (error) {
+        console.error('Error focusing on node:', error);
     }
-  }
 }
 
 
@@ -680,9 +703,8 @@ function focusOnNode(nodeId) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 
-  // ==============================
+
 // COMMUNITY ANALYSIS SECTION
-// ==============================
 
 // Event listener for "Analyze Communities" button
 document.getElementById('run-community-analysis').addEventListener('click', runCommunityAnalysis);
@@ -745,7 +767,7 @@ async function runCommunityAnalysis() {
 
 
 function updateCommunityGraph(apiResponse) {
-    // 1. Validate input data (from your suggestion)
+    // 1. Validate input data
     if (!apiResponse?.communities) {
         console.error("API response is missing 'communities' data.");
         alert("Error: Could not retrieve community information from the server.");
@@ -771,11 +793,10 @@ function updateCommunityGraph(apiResponse) {
     const nodeCommunityMap = apiResponse.communities;
 
     // 2. Get all unique community IDs (ensure robust handling and sorting for consistent color mapping)
-    // Filter out null/undefined community IDs that might come from the API
     const communityIds = Object.values(nodeCommunityMap).filter(id => id !== null && id !== undefined);
     const uniqueCommunityIds = [...new Set(communityIds)].sort((a, b) => String(a).localeCompare(String(b))); // Sort for consistency
 
-    // 3. Create color scale (using your HSL suggestion for better distinct colors)
+    // 3. Create color scale
     const colorScale = d3.scaleOrdinal()
         .domain(uniqueCommunityIds)
         .range(uniqueCommunityIds.map((_, i) => `hsl(${(i * 137.508) % 360}, 85%, 50%)`));
@@ -789,7 +810,7 @@ function updateCommunityGraph(apiResponse) {
         }
     });
 
-    // 5. Prepare nodes with community data (updates global communityGraphData.nodes)
+    // 5. Prepare nodes with community data
     communityGraphData.nodes = communityGraphData.nodes.map(node => {
         const commId = nodeCommunityMap[node.id]; // Might be undefined if node.id not in map
         // If commId is undefined (node not in any community), colorScale(undefined) will assign a color.
@@ -799,14 +820,12 @@ function updateCommunityGraph(apiResponse) {
         return {
             ...node, // Preserves original node data (id, group, features etc.)
             community: commId,
-            color: calculatedColor, // This will be used by renderCurrentGraph's .nodeColor()
-            // Your custom 'size' property (ForceGraph3D won't use this for visual size by default)
+            color: calculatedColor,
             customSize: Math.max(1, Math.min(5, Math.sqrt(communitySizes[commId] || 1)))
         };
     });
 
-    // 6. Link processing (optional, as original links are likely ID-based and fine)
-    // If you want to be absolutely sure about link format:
+    // 6. Link processing
     communityGraphData.links = communityGraphData.links.map(link => ({
          source: typeof link.source === 'object' ? String(link.source.id) : String(link.source),
          target: typeof link.target === 'object' ? String(link.target.id) : String(link.target),
@@ -830,7 +849,7 @@ function updateCommunityGraph(apiResponse) {
 
     // 8. Set mode and trigger re-render
     currentGraphMode = 'community';
-    renderCurrentGraph(); // This function should now use the updated communityGraphData
+    renderCurrentGraph();
 }
 
 function renderSecurityInsights(insights) {
@@ -850,7 +869,7 @@ function renderSecurityInsights(insights) {
         </div>`;
     }
     
-    // 3. Lateral Movement (existing)
+    // 3. Lateral Movement
     if (insights.lateral_movement?.length) {
         html += `
         <div class="insight-section">
@@ -867,7 +886,7 @@ function renderSecurityInsights(insights) {
         </div>`;
     }
     
-    // 4. Command & Control (existing)
+    // 4. Command & Control
     if (insights.command_control?.length) {
         html += `
         <div class="insight-section">
@@ -891,7 +910,7 @@ function addCommunityLegend(container, communityIds, communitySizes, colorScale)
     const legend = document.createElement('div');
     legend.className = 'community-legend';
     
-    // Sort communities by size (descending)
+    // Sort communities by size
     const sortedCommunities = [...communityIds].sort((a, b) => communitySizes[b] - communitySizes[a]);
     
     legend.innerHTML = `
@@ -933,67 +952,6 @@ function updateCommunityMetrics(apiResponse, communitySizes, totalNodes) {
             <span class="metric-value">${apiResponse.modularity?.toFixed(4) || 'N/A'}</span>
         </div>
     `;
-}
-
-
-// Utility function to expose graphData when the original graph is ready
-function setCommunityGraphData(results) {
-    if (!results || !results.nodes || !results.edges) {
-        console.error("Invalid results format for community graph data.");
-        return;
-    }
-
-    const nodes = results.nodes.map((nodeId, i) => ({
-        id: nodeId,
-        group: results.predictions ? results.predictions[i] : null,
-        confidence: results.probabilities ? Math.max(...results.probabilities[i]) : null,
-        probabilities: results.probabilities ? results.probabilities[i] : null,
-        index: i,
-        features: results.features ? results.features[i] : null
-    }));
-
-    const links = results.edges[0].map((srcIdx, i) => ({
-        source: results.nodes[srcIdx],
-        target: results.nodes[results.edges[1][i]],
-        value: 1
-    }));
-
-    communityGraphData = { nodes, links };
-
-    const communityMetricsEl = document.getElementById('community-metrics');
-    const communityCounts = {};
-    let modularity = results.modularity ?? null;
-
-    nodes.forEach(n => {
-        if (n.group !== null) {
-            communityCounts[n.group] = (communityCounts[n.group] || 0) + 1;
-        }
-    });
-
-    const totalCommunities = Object.keys(communityCounts).length;
-    const totalNodes = nodes.length;
-    const totalLinks = links.length;
-
-    let html = `
-        <p><strong>Detected Communities:</strong> ${totalCommunities}</p>
-        <p><strong>Total Nodes:</strong> ${totalNodes}</p>
-        <p><strong>Total Edges:</strong> ${totalLinks}</p>
-    `;
-
-    if (modularity !== null) {
-        html += `<p><strong>Modularity Score:</strong> ${modularity.toFixed(4)}</p>`;
-    }
-
-    html += `<p><strong>Community Sizes:</strong></p><ul>`;
-    for (const [commId, size] of Object.entries(communityCounts)) {
-        html += `<li>Community ${commId}: ${size} nodes</li>`;
-    }
-    html += `</ul>`;
-
-    communityMetricsEl.innerHTML = html;
-
-    // Show the community section
-    document.getElementById('community-analysis-section').style.display = 'block';
 }
 
 

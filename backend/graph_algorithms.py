@@ -1,11 +1,8 @@
 from collections import defaultdict
 import networkx as nx
-import numpy as np
 import community as community_louvain
 from sklearn.cluster import SpectralClustering
-from typing import Dict, Tuple, List
-import torch
-from torch_geometric.utils import to_networkx
+from typing import Dict, Tuple
 
 class GraphAnalyzer:
     def __init__(self):
@@ -192,7 +189,7 @@ class GraphAnalyzer:
         """Identify communities with high attack node concentration"""
         attack_communities = {}
         for node, comm in partition.items():
-            if predictions.get(node, 0) == 1:  # Assuming 1 is attack
+            if predictions.get(node, 0) == 1:  
                 attack_communities[comm] = attack_communities.get(comm, 0) + 1
         
         # Normalize by community size

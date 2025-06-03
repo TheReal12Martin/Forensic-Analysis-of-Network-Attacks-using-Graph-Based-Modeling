@@ -1,5 +1,4 @@
 import matplotlib.pyplot as plt
-import numpy as np
 
 def plot_combined_metrics_trend(val_metrics, test_metrics, output_file="metrics_trend.png"):
     """Plot validation vs test metric trends"""

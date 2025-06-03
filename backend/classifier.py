@@ -1,4 +1,3 @@
-import json
 import torch
 from torch_geometric.data import Data
 import sys
@@ -7,6 +6,8 @@ sys.path.append(str(Path(__file__).parent.parent))
 from models.GAT import GAT
 from typing import Dict, Any
 import numpy as np
+import json
+import math
 
 class NetworkAttackClassifier:
     def __init__(self, model_path: str, device: torch.device, expected_features: int = 13, batch_size: int = 1024):
@@ -64,12 +65,12 @@ class NetworkAttackClassifier:
         """Complete updated classification with dynamic scaling"""
         print("\n=== STARTING CLASSIFICATION ===")
         
-        # --- Input Validation (unchanged) ---
+        # --- Input Validation ---
         if graph_data is None or not hasattr(graph_data, 'x'):
             return {'nodes': [], 'predictions': [], 'probabilities': []}
             
         # --- Feature Scaling ---
-        graph_data.x = graph_data.x * 2.0 - 1.0  # Scale [0,1] -> [-1,1]
+        graph_data.x = graph_data.x * 2.0 - 1.0  # Scale [-1,1]
         
         # --- Model Inference ---
         with torch.no_grad(), torch.amp.autocast(device_type='cuda', enabled=self.device.type == 'cuda'):
@@ -93,7 +94,7 @@ class NetworkAttackClassifier:
 
         # --- Adaptive Thresholding ---
         attack_probs = 1 - scaled_probs[:, 1].cpu().numpy()
-        threshold = max(0.6, np.percentile(attack_probs, 99))  # Increase minimum threshold
+        threshold = max(0.6, np.percentile(attack_probs, 99)) 
         
         # --- Final Predictions ---
         preds = (attack_probs >= threshold).astype(int)
@@ -226,10 +227,6 @@ class NetworkAttackClassifier:
         2. Validates all data types
         3. Uses atomic writes
         """
-        import json
-        import math
-        import numpy as np
-        from pathlib import Path
 
         class SafeJSONEncoder(json.JSONEncoder):
             def encode(self, obj):

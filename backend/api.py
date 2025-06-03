@@ -69,7 +69,7 @@ system['graph_analyzer'] = GraphAnalyzer()
 async def serve_frontend():
     return FileResponse(os.path.join(frontend_dir, "index.html"))
 
-# api.py - updated /api/chunk endpoint
+
 @app.post("/api/chunk")
 async def upload_chunk(
     file: UploadFile = File(...),
@@ -97,7 +97,7 @@ class MergeRequest(BaseModel):
     total_chunks: int
     max_packets: int
 
-# api.py - updated merge endpoint
+
 @app.post("/api/merge")
 async def merge_chunks(req: MergeRequest):
     try:
@@ -122,7 +122,7 @@ async def merge_chunks(req: MergeRequest):
             for i in range(req.total_chunks):
                 chunk_path = chunk_folder / str(i)
                 async with aiofiles.open(chunk_path, 'rb') as infile:
-                    while content := await infile.read(1024 * 1024):  # 1MB chunks
+                    while content := await infile.read(1024 * 1024 * 1024):  # 1MB chunks
                         await outfile.write(content)
                 # Remove the chunk after merging
                 try:
@@ -156,7 +156,7 @@ async def merge_chunks(req: MergeRequest):
             detail=f"Merge failed: {str(e)}"
         )
     
-# api.py - add cleanup endpoint
+
 @app.delete("/api/cleanup")
 async def cleanup_upload(file_id: str):
     try:
@@ -206,7 +206,7 @@ async def process_pcap_file(file_path: str, filename: str, max_packets: int):
             edge_attr=raw_graph.get('edge_attr'),
             y=raw_graph.get('y')
         )
-        graph_data.nodes = raw_graph['nodes']  # preserve custom node info
+        graph_data.nodes = raw_graph['nodes'] 
 
         results = system['classifier'].classify(graph_data)
         attack_count = int(np.sum(results['predictions']))
@@ -259,7 +259,7 @@ async def analyze_communities(request: Request):
             elif isinstance(data['nodes'], dict):
                 G.add_nodes_from(data['nodes'].items())
             
-            # Add edges (assuming edges is [[source_indices], [target_indices]])
+            # Add edges 
             G.add_edges_from(data['edges'])
 
             graph_build_time = time.perf_counter()
@@ -289,7 +289,6 @@ async def analyze_communities(request: Request):
                 G, result['partition']),
             'command_control': system['graph_analyzer'].detect_command_control(
                 G, result['partition']),
-            # Add other detection methods here
         }
         print('Got Security Insights')
 
