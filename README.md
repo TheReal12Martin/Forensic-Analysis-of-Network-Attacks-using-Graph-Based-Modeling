@@ -51,9 +51,9 @@ sudo apt-get install tshark
 
 Prepare dataset in CSVs/BCCC-CIC2018/ (download in https://drive.google.com/drive/folders/1l-tnTSyOzWmW3Qu_1qQWbBfPXwFMEVB_?usp=drive_link) with:
 
-    1. Network traffic CSVs
+1. Network traffic CSVs
 
-    2. Required features (see config.py)
+2. Required features (see config.py)
 
 Run training:
 
@@ -77,7 +77,43 @@ Access frontend at: **http://localhost:8000**
 
 API Endpoints
 
-**Endpoint**	**Description**
-/api/upload	Upload PCAP files
-/api/analyze-communities	Community detection
-/api/merge	Combine file chunks
+| **Endpoint**  |	**Description** |
+| ------------- | ------------------ |
+| /api/upload  |	Upload PCAP files |
+| /api/analyze-communities  |	Community detection |
+| /api/merge  |	Combine file chunks |
+
+
+## Project Structure 📂
+
+```text
+backend/
+├── api.py               # FastAPI endpoints
+├── classifier.py        # Attack classifier
+├── graph_algorithms.py  # Community detection
+└── pcap_processor.py    # PCAP processing
+frontend/
+├── scripts.js           # JS frontend
+├── index.html           # Index
+├── styles.css           # Styles 
+CSVs/                    # Dataset directory
+models/                  # GNN models
+utils/                   # Support modules
+config.py                # Configuration
+main.py                  #Main
+train.py                 # Training pipeline
+```
+
+### Troubleshooting 🚑
+
+| **Issue**  |	**Solution** |
+| ------------- | ------------------ |
+| CUDA OOM  |	Reduce MAX_GRAPH_NODES or BATCH_SIZE |
+| PCAP errors  |	Verify tshark installation |
+| Missing deps  |	```bash pip install --upgrade -r requirements.txt``` |
+| API timeouts  |	Increase --timeout-keep-alive value|
+
+
+
+
+For additional support, please open an issue in the repository.
