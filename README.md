@@ -49,18 +49,18 @@ sudo apt-get install tshark
 
 ## Training the Model 🧠
 
-Prepare dataset in ```bash CSVs/BCCC-CIC2018/``` (download in https://drive.google.com/drive/folders/1l-tnTSyOzWmW3Qu_1qQWbBfPXwFMEVB_?usp=drive_link) with:
+Prepare dataset in ```CSVs/BCCC-CIC2018/``` (download in https://drive.google.com/drive/folders/1l-tnTSyOzWmW3Qu_1qQWbBfPXwFMEVB_?usp=drive_link) with:
 
 1. Network traffic CSVs
 
-2. Required features (see ```bash config.py``` )
+2. Required features (see ```config.py``` )
 
 Run training:
 
 ```bash
 python main.py
 ```
-Keep config parameters (```bash config.py```):
+Keep config parameters (```config.py```):
 
 ```python
 DATA_FOLDER = "CSVs/BCCC-CIC2018"  # Dataset path
@@ -73,15 +73,15 @@ LEARNING_RATE = 0.001              # Model learning rate
 ```bash
 uvicorn backend.api:app --reload --host 0.0.0.0 --port 8000 --timeout-keep-alive 3600
 ```
-Access frontend at: ```bash http://localhost:8000```
+Access frontend at: ```http://localhost:8000```
 
 API Endpoints
 
 | **Endpoint**  |	**Description** |
 | ------------- | ------------------ |
-| ```bash /api/upload```  |	Upload PCAP files |
-| ```bash /api/analyze-communities```  |	Community detection |
-| ```bash /api/merge```  |	Combine file chunks |
+| ```/api/upload```  |	Upload PCAP files |
+| ```/api/analyze-communities```  |	Community detection |
+| ```/api/merge```  |	Combine file chunks |
 
 
 ## Project Structure 📂
@@ -108,10 +108,10 @@ train.py                 # Training pipeline
 
 | **Issue**  |	**Solution** |
 | ------------- | ------------------ |
-| CUDA OOM  |	Reduce ```bash MAX_GRAPH_NODES``` or ```bash BATCH_SIZE``` |
-| PCAP errors  |	Verify ```bash tshark``` installation |
-| Missing deps  |	```bash pip install --upgrade -r requirements.txt``` |
-| API timeouts  |	Increase ```bash --timeout-keep-alive``` value|
+| CUDA OOM  |	Reduce ```MAX_GRAPH_NODES``` or ```BATCH_SIZE``` |
+| PCAP errors  |	Verify ```tshark``` installation |
+| Missing deps  |	```pip install --upgrade -r requirements.txt``` |
+| API timeouts  |	Increase ```--timeout-keep-alive``` value|
 
 
 
