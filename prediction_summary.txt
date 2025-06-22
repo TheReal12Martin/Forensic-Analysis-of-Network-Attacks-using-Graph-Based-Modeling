@@ -1,4 +1,0 @@
-Summary of Predictions:
-prediction
-1    99154
-0      846
