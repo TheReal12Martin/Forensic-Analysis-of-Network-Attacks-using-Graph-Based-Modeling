@@ -49,6 +49,8 @@ sudo apt-get install tshark
 
 ## Training the Model 🧠
 
+The best model comes already in the ```/backend``` folder, but if you want to train a own model based on the same dataset but changing hyperparameters, here are the instructions:
+
 Prepare dataset in ```CSVs/BCCC-CIC2018/``` (download in https://drive.google.com/drive/folders/1l-tnTSyOzWmW3Qu_1qQWbBfPXwFMEVB_?usp=drive_link) with:
 
 1. Network traffic CSVs
@@ -91,6 +93,7 @@ backend/
 ├── api.py               # FastAPI endpoints
 ├── classifier.py        # Attack classifier
 ├── graph_algorithms.py  # Community detection
+├── best_model.pt        # Best trained model achieved
 └── pcap_processor.py    # PCAP processing
 frontend/
 ├── scripts.js           # JS frontend
