@@ -51,7 +51,7 @@ sudo apt-get install tshark
 
 The best model comes already in the ```/backend``` folder, but if you want to train a own model based on the same partitions but changing hyperparameters, here are the instructions:
 
-Prepare data partitions in ```data_partitions``` (download in https://drive.google.com/drive/folders/1l-tnTSyOzWmW3Qu_1qQWbBfPXwFMEVB_?usp=drive_link) with:
+Prepare data partitions in ```/data_partitions``` folder (download in https://drive.google.com/drive/folders/1l-tnTSyOzWmW3Qu_1qQWbBfPXwFMEVB_?usp=drive_link) with:
 
 1. Network traffic npz files which is a balanced version of the BCCC2018 dataset.
 
