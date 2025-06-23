@@ -49,11 +49,11 @@ sudo apt-get install tshark
 
 ## Training the Model 🧠
 
-The best model comes already in the ```/backend``` folder, but if you want to train a own model based on the same dataset but changing hyperparameters, here are the instructions:
+The best model comes already in the ```/backend``` folder, but if you want to train a own model based on the same partitions but changing hyperparameters, here are the instructions:
 
-Prepare dataset in ```CSVs/BCCC-CIC2018/``` (download in https://drive.google.com/drive/folders/1l-tnTSyOzWmW3Qu_1qQWbBfPXwFMEVB_?usp=drive_link) with:
+Prepare data partitions in ```data_partitions``` (download in https://drive.google.com/drive/folders/1l-tnTSyOzWmW3Qu_1qQWbBfPXwFMEVB_?usp=drive_link) with:
 
-1. Network traffic CSVs
+1. Network traffic npz files which is a balanced version of the BCCC2018 dataset.
 
 2. Required features (see ```config.py``` )
 
